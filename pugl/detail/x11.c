@@ -767,6 +767,12 @@ puglPostRedisplay(PuglView* view)
 	return PUGL_SUCCESS;
 }
 
+PuglNativeDisplay
+puglGetNativeDisplay(PuglWorld* world)
+{
+	return (PuglNativeDisplay)world->impl->display;
+}
+
 PuglNativeWindow
 puglGetNativeWindow(PuglView* view)
 {

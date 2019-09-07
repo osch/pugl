@@ -453,6 +453,19 @@ PUGL_API PuglStatus
 puglSetClassName(PuglWorld* world, const char* name);
 
 /**
+   A native display handle.
+
+   On X11, this is a Display*.
+*/
+typedef intptr_t PuglNativeDisplay;
+
+/**
+   Return the native display handle.
+*/
+PUGL_API PuglNativeDisplay
+puglGetNativeDisplay(PuglWorld* world);
+
+/**
    Return the time in seconds.
 
    This is a monotonically increasing clock with high resolution.  The returned
