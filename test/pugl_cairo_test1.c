@@ -110,30 +110,32 @@ buttonDraw(cairo_t* cr, const Button* but, const double time)
 }
 
 static void
-onDisplay(PuglView* view)
+onDisplay(PuglView* view, const PuglEventExpose* ev)
 {
 	cairo_t* cr = (cairo_t*)puglGetContext(view);
 
 	// Draw background
-	const PuglRect frame  = puglGetFrame(view);
-	const double   width  = frame.width;
-	const double   height = frame.height;
+	const double   width  = ev->width;
+	const double   height = ev->height;
 	if (entered) {
-		cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+		cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
 	} else {
-		cairo_set_source_rgb(cr, 0, 0, 0);
+		cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
 	}
 	cairo_rectangle(cr, 0, 0, width, height);
 	cairo_fill(cr);
 
-	// Scale to view size
-	const double scaleX = (width - (512 / width)) / 512.0;
-	const double scaleY = (height - (512 / height)) / 512.0;
+	// Scale to view sizeC
+	const PuglRect frame  = puglGetFrame(view);
+	const double scaleX = (frame.width - (512 / frame.width)) / 512.0;
+	const double scaleY = (frame.height - (512 / frame.height)) / 512.0;
 	cairo_scale(cr, scaleX, scaleY);
 
 	// Draw button
 	for (Button* b = buttons; b->label; ++b) {
+	    for (int i = 0; i < 30; ++i) {
 		buttonDraw(cr, b, opts.continuous ? puglGetTime(world) : 0.0);
+	    }
 	}
 
 	++framesDrawn;
@@ -172,7 +174,7 @@ onEvent(PuglView* view, const PuglEvent* event)
 		puglPostRedisplay(view);
 		break;
 	case PUGL_EXPOSE:
-		onDisplay(view);
+		onDisplay(view, &event->expose);
 		break;
 	case PUGL_CLOSE:
 		onClose(view);
