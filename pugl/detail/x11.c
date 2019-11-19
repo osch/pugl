@@ -65,6 +65,16 @@ static const long eventMask =
 	 EnterWindowMask | LeaveWindowMask | PointerMotionMask |
 	 ButtonPressMask | ButtonReleaseMask | KeyPressMask | KeyReleaseMask);
 
+PuglStatus
+puglInitApplication(const PuglApplicationFlags flags)
+{
+	if (flags & PUGL_APPLICATION_THREADS) {
+		XInitThreads();
+	}
+
+	return PUGL_SUCCESS;
+}
+
 PuglWorldInternals*
 puglInitWorldInternals(void)
 {

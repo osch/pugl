@@ -103,6 +103,12 @@ puglRegisterWindowClass(const char* name)
 	return RegisterClassEx(&wc);
 }
 
+PuglStatus
+puglInitApplication(PuglApplicationFlags PUGL_UNUSED(flags))
+{
+	return PUGL_SUCCESS;
+}
+
 PuglWorldInternals*
 puglInitWorldInternals(void)
 {

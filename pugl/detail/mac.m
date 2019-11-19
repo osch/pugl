@@ -684,6 +684,12 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 
 @end
 
+PuglStatus
+puglInitApplication(PuglApplicationFlags PUGL_UNUSED(flags))
+{
+	return PUGL_SUCCESS;
+}
+
 PuglWorldInternals*
 puglInitWorldInternals(void)
 {
