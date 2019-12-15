@@ -659,28 +659,6 @@ mergeExposeEvents(PuglEvent* dst, const PuglEvent* src)
 }
 
 static void
-sendRedisplayEvent(PuglView* view)
-{
-	XExposeEvent ev = { Expose, 0, True, view->impl->display, view->impl->win,
-	                    0, 0, (int)view->reqWidth, (int)view->reqHeight,
-	                    0 };
-
-	XSendEvent(view->impl->display, view->impl->win, False, 0, (XEvent*)&ev);
-}
-
-static void
-sendAllRedisplayEvents(PuglWorld* world) 
-{
-	// Send expose events for any views with pending redisplays
-	for (size_t i = 0; i < world->numViews; ++i) {
-		if (world->views[i]->redisplay) {
-			sendRedisplayEvent(world->views[i]);
-			world->views[i]->redisplay = false;
-		}
-	}
-}
-
-static void
 flushPendingConfigure(PuglView* view)
 {
 	PuglEvent* const configure = &view->impl->pendingConfigure;
@@ -715,7 +693,6 @@ PuglStatus
 puglPollEvents(PuglWorld* world, const double timeout0)
 {
 	PuglWorldInternals* impl = world->impl;
-	sendAllRedisplayEvents(world);
 	XFlush(impl->display);
 
 	if (XEventsQueued(impl->display, QueuedAlready)) {
@@ -787,8 +764,6 @@ puglDispatchEvents(PuglWorld* world)
 	    if (world->processFunc) world->processFunc(world, world->processUserData);
 	}
 	const PuglX11Atoms* const atoms = &world->impl->atoms;
-
-	sendAllRedisplayEvents(world);
 
 	// Flush just once at the start to fill event queue
 	Display* display = world->impl->display;
@@ -939,23 +914,27 @@ puglGetTime(const PuglWorld* world)
 PuglStatus
 puglPostRedisplay(PuglView* view)
 {
-	view->redisplay = true;
-	return PUGL_SUCCESS;
+	const PuglRect rect = { 0, 0, view->frame.width, view->frame.height };
+
+	return puglPostRedisplayRect(view, rect);
 }
 
 PuglStatus
 puglPostRedisplayRect(PuglView* view, PuglRect rect)
 {
-	if (!view->redisplay) {
-		int x = (int)floor(rect.x);
-		int y = (int)floor(rect.y);
-		int w = (int) ceil(rect.x + rect.width)  - x;
-		int h = (int) ceil(rect.y + rect.height) - y;
-		XExposeEvent ev = { Expose, 0, True, view->impl->display, view->impl->win,
-		                    x, y, w, h, 0 };
-	
-		XSendEvent(view->impl->display, view->impl->win, False, 0, (XEvent*)&ev);
-	}
+	const int x = (int)floor(rect.x);
+	const int y = (int)floor(rect.y);
+	const int w = (int)ceil(rect.x + rect.width) - x;
+	const int h = (int)ceil(rect.y + rect.height) - y;
+
+	XExposeEvent ev = {Expose, 0, True,
+	                   view->impl->display, view->impl->win,
+	                   x, y,
+	                   w, h,
+	                   0};
+
+	XSendEvent(view->impl->display, view->impl->win, False, 0, (XEvent*)&ev);
+
 	return PUGL_SUCCESS;
 }
 

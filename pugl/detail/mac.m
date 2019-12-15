@@ -1098,10 +1098,11 @@ puglPostRedisplay(PuglView* view)
 }
 
 PuglStatus
-puglPostRedisplayRect(PuglView* view, PuglRect rect)
+puglPostRedisplayRect(PuglView* view, const PuglRect rect)
 {
-	[view->impl->drawView setNeedsDisplayInRect: 
+	[view->impl->drawView setNeedsDisplayInRect:
 		CGRectMake(rect.x, rect.y, rect.width, rect.height)];
+
 	return PUGL_SUCCESS;
 }
 
