@@ -133,6 +133,60 @@ puglInitViewInternals(void)
 	return (PuglInternals*)calloc(1, sizeof(PuglInternals));
 }
 
+PuglStatus
+puglPollEvents(PuglWorld* world, const double timeout0)
+{
+	PuglWorldInternals* impl = world->impl;
+	XFlush(impl->display);
+
+	if (XEventsQueued(impl->display, QueuedAlready)) {
+		return PUGL_SUCCESS;
+	}
+	const int fd   = ConnectionNumber(impl->display);
+	const int afd  = impl->awake_fds[0];
+	int nfds = (fd > afd ? fd : afd) + 1;
+	int       ret  = 0;
+	fd_set    fds;
+	FD_ZERO(&fds);
+	FD_SET(fd,  &fds);
+	if (afd >= 0) {
+		FD_SET(afd, &fds);
+	}
+        double timeout;
+        if (impl->nextProcessTime >= 0) {
+            timeout = impl->nextProcessTime - puglGetTime(world);
+            if (timeout < 0) {
+                timeout = 0;
+            }
+            if (timeout0 >= 0 && timeout0 < timeout) {
+                timeout = timeout0;
+            }
+        } else {
+            timeout = timeout0;
+        }
+	if (timeout < 0.0) {
+		ret = select(nfds, &fds, NULL, NULL, NULL);
+	} else {
+		const long     sec  = (long)timeout;
+		const long     msec = (long)((timeout - (double)sec) * 1e6);
+		struct timeval tv   = {sec, msec};
+		ret = select(nfds, &fds, NULL, NULL, &tv);
+	}
+	bool hasEvents = FD_ISSET(fd, &fds);
+	if (ret > 0 && afd >= 0 && FD_ISSET(afd, &fds)) {
+	    hasEvents = true;
+	    impl->needsProcessing = true;
+	    char buf[32];
+	    read(afd, buf, sizeof(buf));
+	}
+	if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= puglGetTime(world)) {
+	    hasEvents = true;
+	    impl->needsProcessing = true;
+	}
+	return ret < 0 ? PUGL_UNKNOWN_ERROR
+	               : hasEvents ? PUGL_SUCCESS : PUGL_FAILURE;
+}
+
 static PuglView*
 puglFindView(PuglWorld* world, const Window window)
 {
@@ -687,60 +741,6 @@ flushPendingConfigure(PuglView* view)
 		view->eventFunc(view, configure);
 		configure->type = 0;
 	}
-}
-
-PuglStatus
-puglPollEvents(PuglWorld* world, const double timeout0)
-{
-	PuglWorldInternals* impl = world->impl;
-	XFlush(impl->display);
-
-	if (XEventsQueued(impl->display, QueuedAlready)) {
-		return PUGL_SUCCESS;
-	}
-	const int fd   = ConnectionNumber(impl->display);
-	const int afd  = impl->awake_fds[0];
-	int nfds = (fd > afd ? fd : afd) + 1;
-	int       ret  = 0;
-	fd_set    fds;
-	FD_ZERO(&fds);
-	FD_SET(fd,  &fds);
-	if (afd >= 0) {
-		FD_SET(afd, &fds);
-	}
-        double timeout;
-        if (impl->nextProcessTime >= 0) {
-            timeout = impl->nextProcessTime - puglGetTime(world);
-            if (timeout < 0) {
-                timeout = 0;
-            }
-            if (timeout0 >= 0 && timeout0 < timeout) {
-                timeout = timeout0;
-            }
-        } else {
-            timeout = timeout0;
-        }
-	if (timeout < 0.0) {
-		ret = select(nfds, &fds, NULL, NULL, NULL);
-	} else {
-		const long     sec  = (long)timeout;
-		const long     msec = (long)((timeout - (double)sec) * 1e6);
-		struct timeval tv   = {sec, msec};
-		ret = select(nfds, &fds, NULL, NULL, &tv);
-	}
-	bool hasEvents = FD_ISSET(fd, &fds);
-	if (ret > 0 && afd >= 0 && FD_ISSET(afd, &fds)) {
-	    hasEvents = true;
-	    impl->needsProcessing = true;
-	    char buf[32];
-	    read(afd, buf, sizeof(buf));
-	}
-	if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= puglGetTime(world)) {
-	    hasEvents = true;
-	    impl->needsProcessing = true;
-	}
-	return ret < 0 ? PUGL_UNKNOWN_ERROR
-	               : hasEvents ? PUGL_SUCCESS : PUGL_FAILURE;
 }
 
 void
