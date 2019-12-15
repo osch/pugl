@@ -630,8 +630,17 @@ puglWaitForEvent(PuglView* view)
 	return PUGL_SUCCESS;
 }
 
+static bool
+exposeEventsIntersect(const PuglEvent* a, const PuglEvent* b)
+{
+	return !(a->expose.x + a->expose.width < b->expose.x ||
+	         b->expose.x + b->expose.width < a->expose.x ||
+	         a->expose.y + a->expose.height < b->expose.y ||
+	         b->expose.y + b->expose.height < a->expose.y);
+}
+
 static void
-merge_expose_events(PuglEvent* dst, const PuglEvent* src)
+mergeExposeEvents(PuglEvent* dst, const PuglEvent* src)
 {
 	if (!dst->type) {
 		*dst = *src;
@@ -668,6 +677,37 @@ sendAllRedisplayEvents(PuglWorld* world)
 			sendRedisplayEvent(world->views[i]);
 			world->views[i]->redisplay = false;
 		}
+	}
+}
+
+static void
+flushPendingConfigure(PuglView* view)
+{
+	PuglEvent* const configure = &view->impl->pendingConfigure;
+
+	if (configure->type) {
+		Display* display = view->impl->display;
+ 		Window xParent = view->parent ? (Window)view->parent
+		                              : RootWindow(display, view->impl->screen);
+	        int x = 0, y = 0;
+	        Window child;
+		XTranslateCoordinates(display, view->impl->win,
+		                               xParent,
+	                                       0, 0,
+	                                       &x, &y, &child);
+		configure->configure.x = x;
+		configure->configure.y = y;
+		view->frame.x      = configure->configure.x;
+		view->frame.y      = configure->configure.y;
+		view->frame.width  = configure->configure.width;
+		view->frame.height = configure->configure.height;
+
+		view->backend->resize(view,
+		                      (int)view->frame.width,
+		                      (int)view->frame.height);
+
+		view->eventFunc(view, configure);
+		configure->type = 0;
 	}
 }
 
@@ -834,7 +874,20 @@ puglDispatchEvents(PuglWorld* world)
 
 		if (event.type == PUGL_EXPOSE) {
 			// Expand expose event to be dispatched after loop
-			merge_expose_events(&view->impl->pendingExpose, &event);
+			if (view->impl->pendingConfigure.type ||
+			    (view->impl->pendingExpose.type &&
+			     exposeEventsIntersect(&view->impl->pendingExpose, &event))) {
+				mergeExposeEvents(&view->impl->pendingExpose, &event);
+			} else {
+				if (view->impl->pendingExpose.type) {
+					puglEnterContext(view, true);
+					flushPendingConfigure(view);
+					puglDispatchEvent(view, &view->impl->pendingExpose);
+					puglLeaveContext(view, true);
+				}
+
+				view->impl->pendingExpose = event;
+			}
 		} else if (event.type == PUGL_CONFIGURE) {
 			// Expand configure event to be dispatched after loop
 			view->impl->pendingConfigure = event;
@@ -854,27 +907,7 @@ puglDispatchEvents(PuglWorld* world)
 			const bool mustExpose = expose->type && expose->expose.count == 0;
 			puglEnterContext(view, mustExpose);
 
-			if (configure->type) {
-			        Window xParent = view->parent ? (Window)view->parent
-	                                                      : RootWindow(display, view->impl->screen);
-	                        int x = 0, y = 0;
-	                        Window child;
-	                        XTranslateCoordinates(display, view->impl->win,
-	                                                       xParent,
-	                                                       0, 0,
-	                                                       &x, &y, &child);
-				configure->configure.x = x;
-				configure->configure.y = y;
-				view->frame.x      = x;
-				view->frame.y      = y;
-				view->frame.width  = configure->configure.width;
-				view->frame.height = configure->configure.height;
-
-				view->backend->resize(view,
-				                      (int)view->frame.width,
-				                      (int)view->frame.height);
-				view->eventFunc(view, &view->impl->pendingConfigure);
-			}
+			flushPendingConfigure(view);
 
 			if (mustExpose) {
 				view->eventFunc(view, &view->impl->pendingExpose);
