@@ -19,6 +19,9 @@
    @file win.h Shared definitions for MacOS implementation.
 */
 
+#ifndef PUGL_DETAIL_MAC_H
+#define PUGL_DETAIL_MAC_H
+
 #include "pugl/pugl.h"
 
 #import <Cocoa/Cocoa.h>
@@ -31,12 +34,10 @@
 	PuglView*                  puglview;
 	NSTrackingArea*            trackingArea;
     NSMutableAttributedString* markedText;
-	NSTimer*                   timer;
 	NSTimer*                   urgentTimer;
 	bool                       reshaped;
 }
 
-- (void) dispatchConfigure:(NSRect)bounds;
 - (void) dispatchExpose:(NSRect)rect;
 - (void) setReshaped;
 
@@ -55,6 +56,9 @@
 struct PuglWorldInternalsImpl {
 	NSApplication*     app;
 	NSAutoreleasePool* autoreleasePool;
+	double             nextProcessTime;
+	id                 worldProxy;
+	NSTimer*           processTimer;
 };
 
 struct PuglInternalsImpl {
@@ -64,3 +68,5 @@ struct PuglInternalsImpl {
 	id               window;
 	uint32_t         mods;
 };
+
+#endif // PUGL_DETAIL_MAC_H

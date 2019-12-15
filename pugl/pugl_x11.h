@@ -21,6 +21,8 @@
 #ifndef PUGL_X11_H
 #define PUGL_X11_H
 
+#include <X11/Xlib.h>
+
 #include "pugl/pugl.h"
 
 #ifdef __cplusplus

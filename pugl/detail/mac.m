@@ -56,6 +56,50 @@ updateViewRect(PuglView* view)
 	}
 }
 
+@interface PuglWorldProxy : NSObject
+{
+	PuglWorld* world;
+}
+@end
+
+@implementation PuglWorldProxy
+- (void) processTimerCallback
+{
+	if (world) {
+		if (world->impl->processTimer) {
+			[world->impl->processTimer invalidate];
+			[world->impl->processTimer release];
+			world->impl->processTimer = NULL;
+		}
+		PuglWorldInternals* impl = world->impl;
+		double current = puglGetTime(world);
+		if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= current) {
+			impl->nextProcessTime = -1;
+			if (world->processFunc) world->processFunc(world, world->processUserData);
+		}
+		if (impl->nextProcessTime >= 0) {
+			world->impl->processTimer =
+				[[NSTimer scheduledTimerWithTimeInterval:impl->nextProcessTime - current
+					                                 target:world->impl->worldProxy
+					                               selector:@selector(processTimerCallback)
+					                               userInfo:nil
+				        	                        repeats:NO] retain];
+		}
+	}
+
+}
+- (void) awakeCallback
+{
+	if (world) {
+		if (world->processFunc) world->processFunc(world, world->processUserData);
+	}
+}
+- (void)setPuglWorld:(PuglWorld*)w
+{
+	world = w;
+}
+@end
+
 @implementation PuglWindow
 
 - (id) initWithContentRect:(NSRect)contentRect
@@ -285,7 +329,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 	[self mouseMoved: event];
 }
 
-- (void) mouseDown:(NSEvent*)event
+- (void) mouseDown2:(NSEvent*)event button:(uint32_t)buttonNumber
 {
 	const NSPoint         wloc = [self eventLocation:event];
 	const NSPoint         rloc = [NSEvent mouseLocation];
@@ -298,12 +342,17 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		rloc.x,
 		[[NSScreen mainScreen] frame].size.height - rloc.y,
 		getModifiers(event),
-		(uint32_t)[event buttonNumber] + 1
+		buttonNumber
 	};
 	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
 }
 
-- (void) mouseUp:(NSEvent*)event
+- (void) mouseDown:(NSEvent*)event
+{
+    [self mouseDown2:event button:1];
+}
+
+- (void) mouseUp2:(NSEvent*)event button:(uint32_t)buttonNumber
 {
 	const NSPoint         wloc = [self eventLocation:event];
 	const NSPoint         rloc = [NSEvent mouseLocation];
@@ -316,29 +365,34 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		rloc.x,
 		[[NSScreen mainScreen] frame].size.height - rloc.y,
 		getModifiers(event),
-		(uint32_t)[event buttonNumber] + 1
+		buttonNumber
 	};
 	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
 }
 
+- (void) mouseUp:(NSEvent*)event
+{
+    [self mouseUp2:event button:1];
+}
+
 - (void) rightMouseDown:(NSEvent*)event
 {
-	[self mouseDown: event];
+	[self mouseDown2:event button:3];
 }
 
 - (void) rightMouseUp:(NSEvent*)event
 {
-	[self mouseUp: event];
+	[self mouseUp2:event button:3];
 }
 
 - (void) otherMouseDown:(NSEvent*)event
 {
-	[self mouseDown: event];
+	[self mouseDown2:event button:2];
 }
 
 - (void) otherMouseUp:(NSEvent*)event
 {
-	[self mouseUp: event];
+	[self mouseUp2:event button:2];
 }
 
 - (void) scrollWheel:(NSEvent*)event
@@ -580,14 +634,6 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 
 - (void) viewWillStartLiveResize
 {
-	timer = [NSTimer timerWithTimeInterval:(1 / 60.0)
-	                                target:self
-	                              selector:@selector(resizeTick)
-	                              userInfo:nil
-	                               repeats:YES];
-	[[NSRunLoop currentRunLoop] addTimer:timer
-	                             forMode:NSRunLoopCommonModes];
-
 	[super viewWillStartLiveResize];
 }
 
@@ -604,8 +650,6 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 - (void) viewDidEndLiveResize
 {
 	[super viewDidEndLiveResize];
-	[timer invalidate];
-	timer = NULL;
 }
 
 @end
@@ -654,6 +698,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 	PuglWrapperView* wrapperView = window->puglview->impl->wrapperView;
 	if (wrapperView->urgentTimer) {
 		[wrapperView->urgentTimer invalidate];
+		[wrapperView->urgentTimer release];
 		wrapperView->urgentTimer = NULL;
 	}
 
@@ -690,8 +735,24 @@ puglInitWorldInternals(void)
 void
 puglFreeWorldInternals(PuglWorld* world)
 {
+	if (world->impl->processTimer) {
+		[world->impl->processTimer invalidate];
+		[world->impl->processTimer release];
+		world->impl->processTimer = NULL;
+	}
+	if (world->impl->worldProxy) {
+		[world->impl->worldProxy release];
+		world->impl->worldProxy = NULL;
+	}
 	[world->impl->autoreleasePool drain];
 	free(world->impl);
+}
+
+PuglStatus
+puglSetClassName(PuglWorld* const world, const char* const name)
+{
+	puglSetString(&world->className, name);
+	return PUGL_SUCCESS;
 }
 
 PuglInternals*
@@ -773,7 +834,7 @@ puglCreateWindow(PuglView* view, const char* title)
 		              ] retain];
 		[window setPuglview:view];
 		[window setTitle:titleString];
-		if (view->minWidth || view->minHeight) {
+		if (view->hints[PUGL_RESIZABLE] && (view->minWidth || view->minHeight)) {
 			[window setContentMinSize:NSMakeSize(view->minWidth,
 			                                     view->minHeight)];
 		}
@@ -783,15 +844,18 @@ puglCreateWindow(PuglView* view, const char* title)
 		((NSWindow*)window).delegate = [[PuglWindowDelegate alloc]
 			                  initWithPuglWindow:window];
 
-		if (view->minAspectX && view->minAspectY) {
+		if (view->hints[PUGL_RESIZABLE] && (view->minAspectX && view->minAspectY)) {
 			[window setContentAspectRatio:NSMakeSize(view->minAspectX,
 			                                         view->minAspectY)];
 		}
+		if (!view->hints[PUGL_RESIZABLE]) {
+			[window setContentMinSize:NSMakeSize(view->reqWidth,
+			                                     view->reqHeight)];
+			[window setContentMaxSize:NSMakeSize(view->reqWidth,
+			                                     view->reqHeight)];
+		}
 
 		[window setContentView:impl->wrapperView];
-		[view->world->impl->app activateIgnoringOtherApps:YES];
-		[window makeFirstResponder:impl->wrapperView];
-		[window makeKeyAndOrderFront:window];
 	}
 
 	[impl->wrapperView updateTrackingAreas];
@@ -802,7 +866,11 @@ puglCreateWindow(PuglView* view, const char* title)
 PuglStatus
 puglShowWindow(PuglView* view)
 {
-	[view->impl->window setIsVisible:YES];
+	NSWindow* window = view->impl->window;
+	[window setIsVisible:YES];
+     	[view->world->impl->app activateIgnoringOtherApps:YES];
+     	[window makeFirstResponder:view->impl->wrapperView];
+     	[window makeKeyAndOrderFront:window];
 	updateViewRect(view);
 	view->visible = true;
 	return PUGL_SUCCESS;
@@ -819,6 +887,12 @@ puglHideWindow(PuglView* view)
 void
 puglFreeViewInternals(PuglView* view)
 {
+	PuglWrapperView* wrapperView = view->impl->wrapperView;
+	if (wrapperView->urgentTimer) {
+		[wrapperView->urgentTimer invalidate];
+		[wrapperView->urgentTimer release];
+		wrapperView->urgentTimer = NULL;
+	}
 	view->backend->destroy(view);
 	[view->impl->wrapperView removeFromSuperview];
 	view->impl->wrapperView->puglview = NULL;
@@ -856,15 +930,64 @@ puglRequestAttention(PuglView* view)
 {
 	if (![view->impl->window isKeyWindow]) {
 		[view->world->impl->app requestUserAttention:NSInformationalRequest];
-		view->impl->wrapperView->urgentTimer =
-			[NSTimer scheduledTimerWithTimeInterval:2.0
+	        PuglWrapperView* wrapperView = view->impl->wrapperView;
+		if (wrapperView->urgentTimer) {
+			[wrapperView->urgentTimer invalidate];
+			[wrapperView->urgentTimer release];
+			wrapperView->urgentTimer = NULL;
+		}
+		wrapperView->urgentTimer =
+		[[NSTimer scheduledTimerWithTimeInterval:2.0
 			                                 target:view->impl->wrapperView
 			                               selector:@selector(urgentTick)
 			                               userInfo:nil
-			                                repeats:YES];
+			                                repeats:YES] retain];
 	}
 
 	return PUGL_SUCCESS;
+}
+
+void
+puglSetProcessFunc(PuglWorld* world, PuglProcessFunc processFunc, void* userData)
+{
+	world->processFunc     = processFunc;
+	world->processUserData = userData;
+	if (!world->impl->worldProxy) {
+		world->impl->worldProxy = [[PuglWorldProxy alloc] init];
+		[world->impl->worldProxy setPuglWorld: world];
+	}
+}
+
+
+void
+puglSetNextProcessTime(PuglWorld* world, double seconds)
+{
+// TODO
+	if (seconds >= 0) {
+		world->impl->nextProcessTime = puglGetTime(world) + seconds;
+		if (!world->impl->worldProxy) {
+			world->impl->worldProxy = [[PuglWorldProxy alloc] init];
+			[world->impl->worldProxy setPuglWorld: world];
+		}
+
+		if (world->impl->processTimer) {
+			[world->impl->processTimer invalidate];
+			[world->impl->processTimer release];
+		}
+		world->impl->processTimer =
+			[[NSTimer scheduledTimerWithTimeInterval:seconds
+				                                 target:world->impl->worldProxy
+				                               selector:@selector(processTimerCallback)
+				                               userInfo:nil
+			        	                        repeats:NO] retain];
+	} else {
+		world->impl->nextProcessTime = -1;
+		if (world->impl->processTimer) {
+			[world->impl->processTimer invalidate];
+			[world->impl->processTimer release];
+			world->impl->processTimer = NULL;
+		}
+	}
 }
 
 PuglStatus
@@ -889,6 +1012,20 @@ puglPollEvents(PuglWorld* world, const double timeout)
 		return PUGL_FAILURE;
 	}
 }
+
+void
+puglAwake(PuglWorld* world)
+{
+	NSAutoreleasePool* localPool = [[NSAutoreleasePool alloc] init];
+	if (world->impl->worldProxy) {
+		[world->impl->worldProxy performSelectorOnMainThread:@selector(awakeCallback)
+		                                          withObject:nil
+		                                       waitUntilDone:NO];
+	}
+	[localPool release];
+}
+
+
 
 PuglStatus
 puglWaitForEvent(PuglView* view)
@@ -980,25 +1117,50 @@ puglSetWindowTitle(PuglView* view, const char* title)
 PuglStatus
 puglSetFrame(PuglView* view, const PuglRect frame)
 {
+	view->reqWidth  = (int)frame.width;
+	view->reqHeight = (int)frame.height;
+
 	PuglInternals* const impl = view->impl;
 
-	// Update view frame to exactly the requested frame in Pugl coordinates
-	view->frame = frame;
-
-	const NSRect rect = NSMakeRect(frame.x, frame.y, frame.width, frame.height);
 	if (impl->window) {
+		const NSRect rect = NSMakeRect(frame.x, frame.y, frame.width, frame.height);
 		// Resize window to fit new content rect
 		const NSRect windowFrame = [
 			impl->window frameRectForContentRect:rectToScreen(rect)];
 
 		[impl->window setFrame:windowFrame display:NO];
+
+		// Resize views
+		const NSRect drawRect = NSMakeRect(0, 0, frame.width, frame.height);
+		[impl->wrapperView setFrame:drawRect];
+		[impl->drawView setFrame:drawRect];
 	}
 
-	// Resize views
-	const NSRect drawRect = NSMakeRect(0, 0, frame.width, frame.height);
-	[impl->wrapperView setFrame:(impl->window ? drawRect : rect)];
-	[impl->drawView setFrame:drawRect];
+	return PUGL_SUCCESS;
+}
 
+PuglStatus
+puglSetSize(PuglView* view, int width, int height)
+{
+	view->reqWidth  = width;
+	view->reqHeight = height;
+
+	PuglInternals* const impl = view->impl;
+	if (impl->window) {
+		NSRect rect = [impl->window contentRectForFrameRect: [impl->window frame]];
+		rect.origin.y += rect.size.height - height;
+		rect.size = NSMakeSize(width, height);
+		// Resize window to fit new content rect
+		const NSRect windowFrame = [
+			impl->window frameRectForContentRect:rect];
+
+		[impl->window setFrame:windowFrame display:NO];
+
+		// Resize views
+		const NSRect drawRect = NSMakeRect(0, 0, width, height);
+		[impl->wrapperView setFrame:drawRect];
+		[impl->drawView setFrame:drawRect];
+	}
 	return PUGL_SUCCESS;
 }
 
@@ -1033,6 +1195,13 @@ puglSetAspectRatio(PuglView* const view,
 		                                                     view->minAspectY)];
 	}
 
+	return PUGL_SUCCESS;
+}
+
+PuglStatus
+puglSetTransientFor(PuglView* view, PuglNativeWindow parent)
+{
+	// not supported for mac
 	return PUGL_SUCCESS;
 }
 

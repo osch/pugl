@@ -20,7 +20,9 @@
    @file x11.c X11 implementation.
 */
 
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 199309L
+#endif
 
 #include "pugl/detail/implementation.h"
 #include "pugl/detail/types.h"
@@ -37,6 +39,8 @@
 #include <sys/select.h>
 #include <sys/time.h>
 
+#include <unistd.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <math.h>
 #include <stdbool.h>
@@ -99,7 +103,22 @@ puglInitWorldInternals(void)
 
 	XFlush(display);
 
+	if (pipe(impl->awake_fds) == 0) {
+		fcntl(impl->awake_fds[1], F_SETFL,
+			fcntl(impl->awake_fds[1], F_GETFL) | O_NONBLOCK);
+	} else {
+		impl->awake_fds[0] = -1;
+	}
+
+	impl->nextProcessTime = -1;
 	return impl;
+}
+
+PuglStatus
+puglSetClassName(PuglWorld* const world, const char* const name)
+{
+	puglSetString(&world->className, name);
+	return PUGL_SUCCESS;
 }
 
 PuglInternals*
@@ -127,10 +146,10 @@ getSizeHints(const PuglView* view)
 
 	if (!view->hints[PUGL_RESIZABLE]) {
 		sizeHints.flags      = PMinSize|PMaxSize;
-		sizeHints.min_width  = (int)view->frame.width;
-		sizeHints.min_height = (int)view->frame.height;
-		sizeHints.max_width  = (int)view->frame.width;
-		sizeHints.max_height = (int)view->frame.height;
+		sizeHints.min_width  = (int)view->reqWidth;
+		sizeHints.min_height = (int)view->reqHeight;
+		sizeHints.max_width  = (int)view->reqWidth;
+		sizeHints.max_height = (int)view->reqHeight;
 	} else {
 		if (view->minWidth || view->minHeight) {
 			sizeHints.flags      = PMinSize;
@@ -156,8 +175,8 @@ puglCreateWindow(PuglView* view, const char* title)
 	PuglWorld* const     world   = view->world;
 	PuglX11Atoms* const  atoms   = &view->world->impl->atoms;
 	Display* const       display = world->impl->display;
-	const int            width   = (int)view->frame.width;
-	const int            height  = (int)view->frame.height;
+	const int            width   = (int)view->reqWidth;
+	const int            height  = (int)view->reqHeight;
 
 	impl->display = display;
 	impl->screen  = DefaultScreen(display);
@@ -181,13 +200,33 @@ puglCreateWindow(PuglView* view, const char* title)
 	XSetWindowAttributes attr = {0};
 	attr.colormap   = cmap;
 	attr.event_mask = eventMask;
+	attr.override_redirect = view->hints[PUGL_IS_POPUP];
 
 	const Window win = impl->win = XCreateWindow(
 		display, xParent,
 		(int)view->frame.x, (int)view->frame.y, width, height,
 		0, impl->vi->depth, InputOutput,
-		impl->vi->visual, CWColormap | CWEventMask, &attr);
+		impl->vi->visual, CWColormap | CWEventMask | CWOverrideRedirect,
+		&attr);
 
+        bool isTransient = !view->parent && view->transientParent;
+	bool isPopup = !view->parent && !view->transientParent && view->hints[PUGL_IS_POPUP];
+	
+	Atom net_wm_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+	Atom net_wm_type_kind = isPopup
+	                         ? XInternAtom(display, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False)
+	                         : XInternAtom(display, "_NET_WM_WINDOW_TYPE_NORMAL", False);
+	XChangeProperty(display, win, net_wm_type,
+	                XA_ATOM, 32, PropModeReplace,
+	                (unsigned char*)&net_wm_type_kind, 1);
+
+	if (isTransient) {
+		Atom wm_state = XInternAtom(display, "_NET_WM_STATE_SKIP_TASKBAR", False);
+		XChangeProperty(display, win, atoms->NET_WM_STATE,
+		                XA_ATOM, 32, PropModeAppend,
+		                (unsigned char*)&wm_state, 1);
+	}
+	                
 	if ((st = view->backend->create(view))) {
 		return st;
 	}
@@ -248,8 +287,12 @@ puglFreeViewInternals(PuglView* view)
 			XDestroyIC(view->impl->xic);
 		}
 		view->backend->destroy(view);
-		XDestroyWindow(view->impl->display, view->impl->win);
-		XFree(view->impl->vi);
+		if (view->impl->display) {
+			XDestroyWindow(view->impl->display, view->impl->win);
+		}
+		if (view->impl->vi) {
+			XFree(view->impl->vi);
+		}
 		free(view->impl);
 	}
 }
@@ -261,6 +304,10 @@ puglFreeWorldInternals(PuglWorld* world)
 		XCloseIM(world->impl->xim);
 	}
 	XCloseDisplay(world->impl->display);
+	if (world->impl->awake_fds[0] >= 0) {
+		close(world->impl->awake_fds[0]);
+		close(world->impl->awake_fds[1]);
+	}
 	free(world->impl);
 }
 
@@ -387,6 +434,8 @@ translateEvent(PuglView* view, XEvent xevent)
 		}
 		break;
 	case MapNotify: {
+		break;
+		/*
 		XWindowAttributes attrs = {0};
 		XGetWindowAttributes(view->impl->display, view->impl->win, &attrs);
 		event.type             = PUGL_CONFIGURE;
@@ -394,7 +443,8 @@ translateEvent(PuglView* view, XEvent xevent)
 		event.configure.y      = attrs.y;
 		event.configure.width  = attrs.width;
 		event.configure.height = attrs.height;
-		break;
+		printf("Map %d %d\n", attrs.x, attrs.y);
+		break;*/
 	}
 	case ConfigureNotify:
 		event.type             = PUGL_CONFIGURE;
@@ -544,6 +594,26 @@ puglRequestAttention(PuglView* view)
 	return PUGL_SUCCESS;
 }
 
+void
+puglSetProcessFunc(PuglWorld* world, PuglProcessFunc processFunc, void* userData)
+{
+	world->processFunc     = processFunc;
+	world->processUserData = userData;
+}
+
+void
+puglSetNextProcessTime(PuglWorld* world, double seconds)
+{
+	if (seconds >= 0) {
+		world->impl->nextProcessTime = puglGetTime(world) + seconds;
+	} else {
+		world->impl->nextProcessTime = -1;
+	}
+}
+
+
+
+
 PuglStatus
 puglWaitForEvent(PuglView* view)
 {
@@ -575,7 +645,7 @@ static void
 sendRedisplayEvent(PuglView* view)
 {
 	XExposeEvent ev = { Expose, 0, True, view->impl->display, view->impl->win,
-	                    0, 0, (int)view->frame.width, (int)view->frame.height,
+	                    0, 0, (int)view->reqWidth, (int)view->reqHeight,
 	                    0 };
 
 	XSendEvent(view->impl->display, view->impl->win, False, 0, (XEvent*)&ev);
@@ -594,21 +664,37 @@ sendAllRedisplayEvents(PuglWorld* world)
 }
 
 PuglStatus
-puglPollEvents(PuglWorld* world, const double timeout)
+puglPollEvents(PuglWorld* world, const double timeout0)
 {
+	PuglWorldInternals* impl = world->impl;
 	sendAllRedisplayEvents(world);
-	XFlush(world->impl->display);
+	XFlush(impl->display);
 
-	if (XEventsQueued(world->impl->display, QueuedAlready)) {
+	if (XEventsQueued(impl->display, QueuedAlready)) {
 		return PUGL_SUCCESS;
 	}
-	const int fd   = ConnectionNumber(world->impl->display);
-	const int nfds = fd + 1;
+	const int fd   = ConnectionNumber(impl->display);
+	const int afd  = impl->awake_fds[0];
+	int nfds = (fd > afd ? fd : afd) + 1;
 	int       ret  = 0;
 	fd_set    fds;
 	FD_ZERO(&fds);
-	FD_SET(fd, &fds);
-
+	FD_SET(fd,  &fds);
+	if (afd >= 0) {
+		FD_SET(afd, &fds);
+	}
+        double timeout;
+        if (impl->nextProcessTime >= 0) {
+            timeout = impl->nextProcessTime - puglGetTime(world);
+            if (timeout < 0) {
+                timeout = 0;
+            }
+            if (timeout0 >= 0 && timeout0 < timeout) {
+                timeout = timeout0;
+            }
+        } else {
+            timeout = timeout0;
+        }
 	if (timeout < 0.0) {
 		ret = select(nfds, &fds, NULL, NULL, NULL);
 	} else {
@@ -617,14 +703,41 @@ puglPollEvents(PuglWorld* world, const double timeout)
 		struct timeval tv   = {sec, msec};
 		ret = select(nfds, &fds, NULL, NULL, &tv);
 	}
-
+	bool hasEvents = FD_ISSET(fd, &fds);
+	if (ret > 0 && afd >= 0 && FD_ISSET(afd, &fds)) {
+	    hasEvents = true;
+	    impl->needsProcessing = true;
+	    char buf[32];
+	    read(afd, buf, sizeof(buf));
+	}
+	if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= puglGetTime(world)) {
+	    hasEvents = true;
+	    impl->needsProcessing = true;
+	}
 	return ret < 0 ? PUGL_UNKNOWN_ERROR
-	               : ret == 0 ? PUGL_FAILURE : PUGL_SUCCESS;
+	               : hasEvents ? PUGL_SUCCESS : PUGL_FAILURE;
+}
+
+void
+puglAwake(PuglWorld* world)
+{
+	if (world->impl->awake_fds[0] >= 0) {
+		char c = 0;
+		write(world->impl->awake_fds[1], &c, 1);
+	}
 }
 
 PUGL_API PuglStatus
 puglDispatchEvents(PuglWorld* world)
 {
+	PuglWorldInternals* impl = world->impl;
+	if (    impl->needsProcessing
+	    || (impl->nextProcessTime >= 0 && impl->nextProcessTime <= puglGetTime(world)))
+	{
+	    impl->needsProcessing = false;
+	    impl->nextProcessTime = -1;
+	    if (world->processFunc) world->processFunc(world, world->processUserData);
+	}
 	const PuglX11Atoms* const atoms = &world->impl->atoms;
 
 	sendAllRedisplayEvents(world);
@@ -734,8 +847,18 @@ puglDispatchEvents(PuglWorld* world)
 			puglEnterContext(view, mustExpose);
 
 			if (configure->type) {
-				view->frame.x      = configure->configure.x;
-				view->frame.y      = configure->configure.y;
+			        Window xParent = view->parent ? (Window)view->parent
+	                                                      : RootWindow(display, view->impl->screen);
+	                        int x = 0, y = 0;
+	                        Window child;
+	                        XTranslateCoordinates(display, view->impl->win,
+	                                                       xParent,
+	                                                       0, 0,
+	                                                       &x, &y, &child);
+				configure->configure.x = x;
+				configure->configure.y = y;
+				view->frame.x      = x;
+				view->frame.y      = y;
 				view->frame.width  = configure->configure.width;
 				view->frame.height = configure->configure.height;
 
@@ -819,13 +942,30 @@ puglSetWindowTitle(PuglView* view, const char* title)
 PuglStatus
 puglSetFrame(PuglView* view, const PuglRect frame)
 {
-	view->frame = frame;
+	view->reqWidth  = (int)frame.width;
+	view->reqHeight = (int)frame.height;
 
-	if (view->impl->win &&
+	if (view->impl->win) {
+	    XSizeHints sizeHints = getSizeHints(view);
+	    XSetNormalHints(view->world->impl->display, view->impl->win, &sizeHints);
 	    XMoveResizeWindow(view->world->impl->display, view->impl->win,
 	                      (int)frame.x, (int)frame.y,
-	                      (int)frame.width, (int)frame.height)) {
-		return PUGL_UNKNOWN_ERROR;
+	                      (int)frame.width, (int)frame.height);
+	}
+
+	return PUGL_SUCCESS;
+}
+
+PuglStatus
+puglSetSize(PuglView* view, int width, int height)
+{
+	view->reqWidth  = width;
+	view->reqHeight = height;
+	
+	if (view->impl->win) {
+	    XSizeHints sizeHints = getSizeHints(view);
+	    XSetNormalHints(view->world->impl->display, view->impl->win, &sizeHints);
+	    XResizeWindow(view->world->impl->display, view->impl->win, width, height);
 	}
 
 	return PUGL_SUCCESS;

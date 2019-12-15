@@ -57,21 +57,23 @@ puglX11CairoClose(PuglView* view)
 	PuglInternals* const       impl    = view->impl;
 	PuglX11CairoSurface* const surface = (PuglX11CairoSurface*)impl->surface;
 
-	if (surface->frontCr) {
-		cairo_destroy(surface->frontCr);
-		surface->frontCr = NULL;
-	}
-	if (surface->front) {
-		cairo_surface_destroy(surface->front);
-		surface->front = NULL;
-	}
-	if (surface->backCr) {
-		cairo_destroy(surface->backCr);
-		surface->backCr = NULL;
-	}
-	if (surface->back) {
-		cairo_surface_destroy(surface->back);
-		surface->back = NULL;
+	if (surface) {
+		if (surface->frontCr) {
+			cairo_destroy(surface->frontCr);
+			surface->frontCr = NULL;
+		}
+		if (surface->front) {
+			cairo_surface_destroy(surface->front);
+			surface->front = NULL;
+		}
+		if (surface->backCr) {
+			cairo_destroy(surface->backCr);
+			surface->backCr = NULL;
+		}
+		if (surface->back) {
+			cairo_surface_destroy(surface->back);
+			surface->back = NULL;
+		}
 	}
 }
 

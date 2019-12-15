@@ -25,21 +25,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef PUGL_SHARED
-#    ifdef _WIN32
-#        define PUGL_LIB_IMPORT __declspec(dllimport)
-#        define PUGL_LIB_EXPORT __declspec(dllexport)
+#ifndef PUGL_API
+#    ifdef PUGL_SHARED
+#        ifdef _WIN32
+#            define PUGL_LIB_IMPORT __declspec(dllimport)
+#            define PUGL_LIB_EXPORT __declspec(dllexport)
+#        else
+#            define PUGL_LIB_IMPORT __attribute__((visibility("default")))
+#            define PUGL_LIB_EXPORT __attribute__((visibility("default")))
+#        endif
+#        ifdef PUGL_INTERNAL
+#            define PUGL_API PUGL_LIB_EXPORT
+#        else
+#            define PUGL_API PUGL_LIB_IMPORT
+#        endif
 #    else
-#        define PUGL_LIB_IMPORT __attribute__((visibility("default")))
-#        define PUGL_LIB_EXPORT __attribute__((visibility("default")))
+#        define PUGL_API
 #    endif
-#    ifdef PUGL_INTERNAL
-#        define PUGL_API PUGL_LIB_EXPORT
-#    else
-#        define PUGL_API PUGL_LIB_IMPORT
-#    endif
-#else
-#    define PUGL_API
 #endif
 
 #ifdef __cplusplus
@@ -91,6 +93,7 @@ typedef enum {
 	PUGL_SWAP_INTERVAL,         /**< Number of frames between buffer swaps */
 	PUGL_RESIZABLE,             /**< True if window should be resizable */
 	PUGL_IGNORE_KEY_REPEAT,     /**< True if key repeat events are ignored */
+	PUGL_IS_POPUP,              /**< True if window is popup window */
 
 	PUGL_NUM_WINDOW_HINTS
 } PuglViewHint;
@@ -205,7 +208,8 @@ typedef enum {
 	PUGL_MOTION_NOTIFY,        /**< Pointer motion */
 	PUGL_SCROLL,               /**< Scroll */
 	PUGL_FOCUS_IN,             /**< Keyboard focus entered view */
-	PUGL_FOCUS_OUT             /**< Keyboard focus left view */
+	PUGL_FOCUS_OUT,            /**< Keyboard focus left view */
+	PUGL_DESTROY               /**< View is going to be destroyed */
 } PuglEventType;
 
 typedef enum {
@@ -278,6 +282,14 @@ typedef struct {
 	PuglEventType type;        /**< PUGL_CLOSE. */
 	uint32_t      flags;       /**< Bitwise OR of PuglEventFlag values. */
 } PuglEventClose;
+
+/**
+   Window destroy event.
+*/
+typedef struct {
+	PuglEventType type;        /**< PUGL_DESTROY. */
+	uint32_t      flags;       /**< Bitwise OR of PuglEventFlag values. */
+} PuglEventDestroy;
 
 /**
    Key press/release event.
@@ -406,6 +418,7 @@ typedef union {
 	PuglEventMotion    motion;     /**< PUGL_MOTION_NOTIFY. */
 	PuglEventScroll    scroll;     /**< PUGL_SCROLL. */
 	PuglEventFocus     focus;      /**< PUGL_FOCUS_IN, PUGL_FOCUS_OUT. */
+	PuglEventDestroy   destroy;    /**< PUGL_DESTROY. */
 } PuglEvent;
 
 /**
@@ -486,6 +499,34 @@ puglPollEvents(PuglWorld* world, double timeout);
 */
 PUGL_API PuglStatus
 puglDispatchEvents(PuglWorld* world);
+
+/**
+   A function called when an timer or awake event occurs for processing common
+   things for the given world.
+*/
+typedef PuglStatus (*PuglProcessFunc)(PuglWorld* world, void* userData);
+
+/**
+   Set the world's process function. This function is called when an process 
+   timer or awake event occurs.
+*/
+PUGL_API void
+puglSetProcessFunc(PuglWorld* world, PuglProcessFunc processFunc, void* userData);
+
+/**
+   Sets the time in seconds when the world's process function will be
+   invoked once. This timer is not periodic, i.e. this function has
+   to be called again to schedule subsequent invocations.
+   For seconds < 0 the timer is disabled.
+*/
+PUGL_API void
+puglSetNextProcessTime(PuglWorld* world, double seconds);
+
+/**
+  Can be called from another thread to trigger the world's process function.
+*/
+PUGL_API void
+puglAwake(PuglWorld* world);
 
 /**
    @}
@@ -584,6 +625,12 @@ puglGetFrame(const PuglView* view);
 */
 PUGL_API PuglStatus
 puglSetFrame(PuglView* view, PuglRect frame);
+
+/**
+   Set the current size of the view.
+*/
+PUGL_API PuglStatus
+puglSetSize(PuglView* view, int width, int height);
 
 /**
    Set the minimum size of the view.

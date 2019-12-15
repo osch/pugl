@@ -27,39 +27,53 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef PUGL_API_INTERN
+#   define PUGL_API_INTERN
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /** Set `blob` to `data` with length `len`, reallocating if necessary. */
+PUGL_API_INTERN
 void puglSetBlob(PuglBlob* blob, const void* data, size_t len);
 
 /** Reallocate and set `*dest` to `string`. */
+PUGL_API_INTERN
 void puglSetString(char** dest, const char* string);
 
 /** Allocate and initialise world internals (implemented once per platform) */
+PUGL_API_INTERN
 PuglWorldInternals* puglInitWorldInternals(void);
 
 /** Destroy and free world internals (implemented once per platform) */
+PUGL_API_INTERN
 void puglFreeWorldInternals(PuglWorld* world);
 
 /** Allocate and initialise view internals (implemented once per platform) */
+PUGL_API_INTERN
 PuglInternals* puglInitViewInternals(void);
 
 /** Destroy and free view internals (implemented once per platform) */
+PUGL_API_INTERN
 void puglFreeViewInternals(PuglView* view);
 
 /** Return the Unicode code point for `buf` or the replacement character. */
+PUGL_API_INTERN
 uint32_t puglDecodeUTF8(const uint8_t* buf);
 
 /** Dispatch `event` to `view`, optimising configure/expose if possible. */
+PUGL_API_INTERN
 void puglDispatchEvent(PuglView* view, const PuglEvent* event);
 
 /** Set internal (stored in view) clipboard contents. */
+PUGL_API_INTERN 
 const void*
 puglGetInternalClipboard(const PuglView* view, const char** type, size_t* len);
 
 /** Set internal (stored in view) clipboard contents. */
+PUGL_API_INTERN
 PuglStatus
 puglSetInternalClipboard(PuglView*   view,
                          const char* type,

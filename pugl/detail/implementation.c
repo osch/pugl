@@ -64,6 +64,7 @@ puglSetDefaultHints(PuglHints hints)
 	hints[PUGL_DOUBLE_BUFFER]         = PUGL_FALSE;
 	hints[PUGL_SWAP_INTERVAL]         = 0;
 	hints[PUGL_RESIZABLE]             = PUGL_FALSE;
+	hints[PUGL_IS_POPUP]              = PUGL_FALSE;
 	hints[PUGL_IGNORE_KEY_REPEAT]     = PUGL_FALSE;
 }
 
@@ -91,13 +92,6 @@ puglFreeWorld(PuglWorld* const world)
 	free(world);
 }
 
-PuglStatus
-puglSetClassName(PuglWorld* const world, const char* const name)
-{
-	puglSetString(&world->className, name);
-	return PUGL_SUCCESS;
-}
-
 PuglView*
 puglNewView(PuglWorld* const world)
 {
@@ -108,8 +102,8 @@ puglNewView(PuglWorld* const world)
 	}
 
 	view->world        = world;
-	view->frame.width  = 640;
-	view->frame.height = 480;
+	view->frame.width  = view->reqWidth  = 640;
+	view->frame.height = view->reqHeight = 480;
 
 	puglSetDefaultHints(view->hints);
 

@@ -47,10 +47,15 @@
 
 #define PUGL_LOCAL_CLOSE_MSG (WM_USER + 50)
 #define PUGL_LOCAL_MARK_MSG  (WM_USER + 51)
-#define PUGL_RESIZE_TIMER_ID 9461
-#define PUGL_URGENT_TIMER_ID 9462
+#define PUGL_LOCAL_AWAKE_MSG (WM_USER + 52)
+#define PUGL_RESIZE_TIMER_ID  9461
+#define PUGL_URGENT_TIMER_ID  9462
+#define PUGL_PROCESS_TIMER_ID 9463
 
 typedef BOOL (WINAPI *PFN_SetProcessDPIAware)(void);
+
+LRESULT CALLBACK
+worldWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
 LRESULT CALLBACK
 wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -82,26 +87,6 @@ puglWideCharToUtf8(const wchar_t* const wstr, size_t* len)
 	return NULL;
 }
 
-static bool
-puglRegisterWindowClass(const char* name)
-{
-	WNDCLASSEX wc = { 0 };
-	if (GetClassInfoEx(GetModuleHandle(NULL), name, &wc)) {
-		return true; // Already registered
-	}
-
-	wc.cbSize        = sizeof(wc);
-	wc.style         = CS_OWNDC;
-	wc.lpfnWndProc   = wndProc;
-	wc.hInstance     = GetModuleHandle(NULL);
-	wc.hIcon         = LoadIcon(NULL, IDI_APPLICATION);
-	wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-	wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-	wc.lpszClassName = name;
-
-	return RegisterClassEx(&wc);
-}
-
 PuglWorldInternals*
 puglInitWorldInternals(void)
 {
@@ -122,12 +107,137 @@ puglInitWorldInternals(void)
 
 		FreeLibrary(user32);
 	}
-
 	LARGE_INTEGER frequency;
 	QueryPerformanceFrequency(&frequency);
 	impl->timerFrequency = (double)frequency.QuadPart;
-
+	impl->nextProcessTime = -1;
 	return impl;
+}
+
+static char*
+puglWindowClassName(const char* className, const char* suffix)
+{
+	size_t len1 = strlen(className);
+	size_t len2 = suffix ? strlen(suffix) : 0;
+	size_t len  = len1 + len2;
+	char* buffer = malloc(len + 10);
+	if (buffer) {
+		strcpy(buffer, className);
+		if (suffix) strcpy(buffer + len1, suffix);
+		int i = 0;
+		WNDCLASSEX wc = { 0 };
+		while (i < 32000) {
+			if (GetClassInfoEx(GetModuleHandle(NULL), buffer, &wc)) {
+				// Already registered
+				i += 1;
+				snprintf(buffer + len, 10, "-%d", i);
+			} else {
+				break;
+			}
+		}
+		if (i < 32000) {
+			return buffer;
+		} else {
+			free(buffer);
+			return NULL;
+		}
+	} else {
+		return NULL;
+	}
+}
+
+static void puglFreeString(char** ptr) 
+{
+	if (*ptr) {
+		free(*ptr); *ptr = NULL;
+	}
+}
+
+static bool
+puglInitWorldInternals2(PuglWorld* world)
+{
+	PuglWorldInternals* impl = world->impl;
+	if (impl->initialized) {
+		return true;
+	}
+	{
+		char* buffer = puglWindowClassName(world->className, "-msg");
+		if (!buffer) {
+			goto failed;
+		}
+		puglSetString(&impl->worldClassName, buffer);
+		free(buffer); 
+	}
+	{
+		char* buffer = puglWindowClassName(world->className, NULL);
+		if (!buffer) {
+			goto failed;
+		}
+		puglSetString(&impl->windowClassName, buffer);
+		free(buffer); 
+	}
+	{
+		char* buffer = puglWindowClassName(world->className, "-popup");
+		if (!buffer) {
+			goto failed;
+		}
+		puglSetString(&impl->popupClassName, buffer);
+		free(buffer); 
+	}
+	WNDCLASSEX wc = { 0 };
+	wc.cbSize        = sizeof(wc);
+	wc.style         = CS_OWNDC;
+	wc.lpfnWndProc   = worldWndProc;
+	wc.hInstance     = GetModuleHandle(NULL);
+	wc.hIcon         = LoadIcon(NULL, IDI_APPLICATION);
+	wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
+	wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+	wc.lpszClassName = impl->worldClassName;
+	if (RegisterClassEx(&wc) == 0) {
+		goto failed;
+	}
+	wc.lpfnWndProc   = wndProc;
+	wc.lpszClassName = impl->windowClassName;
+	if (RegisterClassEx(&wc) == 0) {
+		UnregisterClass(impl->worldClassName, NULL);
+		goto failed;
+	}
+	wc.style |= 0x00020000 /* CS_DROPSHADOW */;
+	wc.lpszClassName = impl->popupClassName;
+	if (RegisterClassEx(&wc) == 0) {
+		UnregisterClass(impl->worldClassName, NULL);
+		UnregisterClass(impl->windowClassName, NULL);
+		goto failed;
+	}
+	impl->messageReceiver = CreateWindowEx(0, impl->worldClassName, impl->worldClassName, 
+	                                       0, 0, 0, 0, 0, 
+	                                       HWND_MESSAGE, NULL, NULL, NULL);
+	if (!impl->messageReceiver) {
+		UnregisterClass(impl->worldClassName, NULL);
+		UnregisterClass(impl->windowClassName, NULL);
+		UnregisterClass(impl->popupClassName, NULL);
+		goto failed;
+	}
+	SetWindowLongPtr(impl->messageReceiver, GWLP_USERDATA, (LONG_PTR)world);
+	impl->initialized = true;
+	return true;
+
+failed:
+	puglFreeString(&impl->worldClassName);
+	puglFreeString(&impl->windowClassName);
+	puglFreeString(&impl->popupClassName);
+	return false;
+}
+
+PuglStatus
+puglSetClassName(PuglWorld* const world, const char* const name)
+{
+	if (world->impl->initialized) {
+		return PUGL_FAILURE;
+	} else {
+		puglSetString(&world->className, name);
+		return puglInitWorldInternals2(world) ? PUGL_SUCCESS : PUGL_FAILURE;
+	}
 }
 
 PuglInternals*
@@ -139,15 +249,28 @@ puglInitViewInternals(void)
 PuglStatus
 puglPollEvents(PuglWorld* world, const double timeout)
 {
-	(void)world;
+	if (!world->impl->initialized && !puglInitWorldInternals2(world)) {
+		return PUGL_FAILURE;
+	}
 
 	if (timeout < 0) {
 		WaitMessage();
 	} else {
-		MsgWaitForMultipleObjects(
+		DWORD rc = MsgWaitForMultipleObjects(
 			0, NULL, FALSE, (DWORD)(timeout * 1e3), QS_ALLEVENTS);
+		if (rc != WAIT_OBJECT_0)  {
+			return PUGL_FAILURE;
+		}
 	}
 	return PUGL_SUCCESS;
+}
+
+void
+puglAwake(PuglWorld* world)
+{
+	if (world->impl->messageReceiver) {
+		PostMessage(world->impl->messageReceiver, PUGL_LOCAL_AWAKE_MSG, 0, 0);
+	}
 }
 
 PuglStatus
@@ -163,7 +286,7 @@ puglCreateWindow(PuglView* view, const char* title)
 	view->impl->refreshRate = devMode.dmDisplayFrequency;
 
 	// Register window class if necessary
-	if (!puglRegisterWindowClass(view->world->className)) {
+	if (!view->world->impl->initialized && !puglInitWorldInternals2(view->world)) {
 		return PUGL_REGISTRATION_FAILED;
 	}
 
@@ -214,6 +337,7 @@ puglFreeViewInternals(PuglView* view)
 	if (view) {
 		view->backend->destroy(view);
 		ReleaseDC(view->impl->hwnd, view->impl->hdc);
+		SetWindowLongPtr(view->impl->hwnd, GWLP_USERDATA, (LONG_PTR)NULL);
 		DestroyWindow(view->impl->hwnd);
 		free(view->impl);
 	}
@@ -222,7 +346,25 @@ puglFreeViewInternals(PuglView* view)
 void
 puglFreeWorldInternals(PuglWorld* world)
 {
-	UnregisterClass(world->className, NULL);
+	if (world->impl->worldClassName) {
+		UnregisterClass(world->impl->worldClassName, NULL);
+		free(world->impl->worldClassName);
+		world->impl->worldClassName = NULL;
+	}
+	if (world->impl->windowClassName) {
+		UnregisterClass(world->impl->windowClassName, NULL);
+		free(world->impl->windowClassName);
+		world->impl->windowClassName = NULL;
+	}
+	if (world->impl->popupClassName) {
+		UnregisterClass(world->impl->popupClassName, NULL);
+		free(world->impl->popupClassName);
+		world->impl->popupClassName = NULL;
+	}
+	if (world->impl->messageReceiver) {
+		SetWindowLongPtr(world->impl->messageReceiver, GWLP_USERDATA, (LONG_PTR)NULL);
+		DestroyWindow(world->impl->messageReceiver);
+	}
 	free(world->impl);
 }
 
@@ -424,7 +566,9 @@ handleConfigure(PuglView* view, PuglEvent* event)
 	                view->parent ? (HWND)view->parent : HWND_DESKTOP,
 	                (LPPOINT)&rect,
 	                2);
-
+	double oldWidth  = view->frame.width;
+	double oldHeight = view->frame.height;
+	
 	view->frame.x      = rect.left;
 	view->frame.y      = rect.top;
 	view->frame.width  = rect.right - rect.left;
@@ -436,9 +580,11 @@ handleConfigure(PuglView* view, PuglEvent* event)
 	event->configure.width  = view->frame.width;
 	event->configure.height = view->frame.height;
 
-	view->backend->resize(view,
-	                      rect.right - rect.left,
-	                      rect.bottom - rect.top);
+	if (oldWidth != view->frame.width || oldHeight != view->frame.height) {
+		view->backend->resize(view,
+		                      view->frame.width,
+		                      view->frame.height);
+	}
 	return rect;
 }
 
@@ -525,8 +671,10 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 	if (InSendMessageEx(dummy_ptr)) {
 		event.any.flags |= PUGL_IS_SEND_EVENT;
 	}
-
 	switch (message) {
+	case WM_MOVE:
+		handleConfigure(view, &event);
+		break;
 	case WM_SHOWWINDOW:
 		rect = handleConfigure(view, &event);
 		RedrawWindow(view->impl->hwnd, NULL, NULL,
@@ -545,10 +693,10 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_ENTERSIZEMOVE:
 	case WM_ENTERMENULOOP:
 		view->impl->resizing = true;
-		SetTimer(view->impl->hwnd,
+/*		SetTimer(view->impl->hwnd,
 		         PUGL_RESIZE_TIMER_ID,
 		         1000 / view->impl->refreshRate,
-		         NULL);
+		         NULL);*/
 		break;
 	case WM_TIMER:
 		if (wParam == PUGL_RESIZE_TIMER_ID) {
@@ -560,9 +708,9 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_EXITSIZEMOVE:
 	case WM_EXITMENULOOP:
-		KillTimer(view->impl->hwnd, PUGL_RESIZE_TIMER_ID);
+//		KillTimer(view->impl->hwnd, PUGL_RESIZE_TIMER_ID);
 		view->impl->resizing = false;
-		puglPostRedisplay(view);
+//		puglPostRedisplay(view);
 		break;
 	case WM_GETMINMAXINFO:
 		mmi                   = (MINMAXINFO*)lParam;
@@ -656,6 +804,7 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_KILLFOCUS:
 		event.type = PUGL_FOCUS_OUT;
 		break;
+/* SYSKEY-Handling disabled, otherwise things like Alt+F4 are not working...
 	case WM_SYSKEYDOWN:
 		initKeyEvent(&event.key, view, true, wParam, lParam);
 		break;
@@ -663,16 +812,26 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 		initKeyEvent(&event.key, view, false, wParam, lParam);
 		break;
 	case WM_SYSCHAR:
-		return TRUE;
+		return TRUE;*/
 	case WM_QUIT:
 	case PUGL_LOCAL_CLOSE_MSG:
 		event.close.type = PUGL_CLOSE;
+		break;
+	case WM_DESTROY:
+	        event.destroy.type = PUGL_DESTROY;
 		break;
 	default:
 		return DefWindowProc(view->impl->hwnd, message, wParam, lParam);
 	}
 
 	puglDispatchEvent(view, &event);
+
+	if (event.type == PUGL_DESTROY 
+	    && view == (PuglView*)GetWindowLongPtr(view->impl->hwnd, GWLP_USERDATA))
+	{
+	    fprintf(stderr, "error: puglFreeView() should have been called in response to PUGL_DESTROY event.\n");
+	    abort();
+	}
 
 	return 0;
 }
@@ -700,6 +859,32 @@ puglRequestAttention(PuglView* view)
 	}
 
 	return PUGL_SUCCESS;
+}
+
+void
+puglSetProcessFunc(PuglWorld* world, PuglProcessFunc processFunc, void* userData)
+{
+	world->processFunc     = processFunc;
+	world->processUserData = userData;
+}
+
+void
+puglSetNextProcessTime(PuglWorld* world, double seconds)
+{
+	if (!world->impl->initialized && !puglInitWorldInternals2(world)) {
+		return;
+	}
+	if (seconds >= 0) {
+		world->impl->nextProcessTime = puglGetTime(world) + seconds;
+		SetTimer(world->impl->messageReceiver,
+			 PUGL_PROCESS_TIMER_ID,
+			 (UINT)(seconds * 1000),
+			 NULL);
+	} else {
+		world->impl->nextProcessTime = -1;
+		KillTimer(world->impl->messageReceiver, 
+		          PUGL_PROCESS_TIMER_ID);
+	}
 }
 
 PuglStatus
@@ -751,6 +936,44 @@ puglProcessEvents(PuglView* view)
 }
 
 LRESULT CALLBACK
+worldWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	PuglWorld* world = (PuglWorld*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+
+	switch (message) {
+	case WM_TIMER:
+		if (  world && hwnd == world->impl->messageReceiver
+		   && wParam == PUGL_PROCESS_TIMER_ID) 
+		{
+		    PuglWorldInternals* impl = world->impl;
+		    double current = puglGetTime(world);
+		    if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= current) {
+		        impl->nextProcessTime = -1;
+		        KillTimer(impl->messageReceiver, PUGL_PROCESS_TIMER_ID);
+		        if (world->processFunc) world->processFunc(world, world->processUserData);
+		    } else if (impl->nextProcessTime >= 0) {
+		        double seconds = impl->nextProcessTime - current;
+		        SetTimer(world->impl->messageReceiver,
+		                 PUGL_PROCESS_TIMER_ID,
+		                 (UINT)(seconds * 1000),
+		                 NULL);
+		    } else {
+		        KillTimer(impl->messageReceiver, PUGL_PROCESS_TIMER_ID);
+		    }
+		}
+		break;
+	case PUGL_LOCAL_AWAKE_MSG:
+		if (world && hwnd == world->impl->messageReceiver) {
+		        if (world->processFunc) world->processFunc(world, world->processUserData);
+		}
+		break;
+	default:
+		return DefWindowProc(hwnd, message, wParam, lParam);
+	}
+}
+
+
+LRESULT CALLBACK
 wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	PuglView* view = (PuglView*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -761,8 +984,6 @@ wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 		return 0;
 	case WM_CLOSE:
 		PostMessage(hwnd, PUGL_LOCAL_CLOSE_MSG, wParam, lParam);
-		return 0;
-	case WM_DESTROY:
 		return 0;
 	default:
 		if (view && hwnd == view->impl->hwnd) {
@@ -827,7 +1048,8 @@ puglSetWindowTitle(PuglView* view, const char* title)
 PuglStatus
 puglSetFrame(PuglView* view, const PuglRect frame)
 {
-	view->frame = frame;
+	view->reqWidth  = (int)frame.width;
+	view->reqHeight = (int)frame.height;
 
 	if (view->impl->hwnd) {
 		RECT rect = { (long)frame.x,
@@ -843,6 +1065,33 @@ puglSetFrame(PuglView* view, const PuglRect frame)
 		                  rect.left, rect.top,
 		                  rect.right - rect.left, rect.bottom - rect.top,
 		                  (SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_NOZORDER))) {
+			return PUGL_UNKNOWN_ERROR;
+		}
+	}
+
+	return PUGL_SUCCESS;
+}
+
+PuglStatus
+puglSetSize(PuglView* view, int width, int height)
+{
+	view->reqWidth  = width;
+	view->reqHeight = height;
+
+	if (view->impl->hwnd) {
+		RECT rect = { (long)view->frame.x,
+		              (long)view->frame.y,
+		              (long)view->frame.x + width,
+		              (long)view->frame.y + height };
+
+		AdjustWindowRectEx(&rect, puglWinGetWindowFlags(view),
+		                   FALSE,
+		                   puglWinGetWindowExFlags(view));
+
+		if (!SetWindowPos(view->impl->hwnd, HWND_TOP,
+		                  rect.left, rect.top,
+		                  rect.right - rect.left, rect.bottom - rect.top,
+		                  (SWP_NOMOVE|SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_NOZORDER))) {
 			return PUGL_UNKNOWN_ERROR;
 		}
 	}
@@ -870,6 +1119,17 @@ puglSetAspectRatio(PuglView* const view,
 	view->maxAspectX = maxX;
 	view->maxAspectY = maxY;
 	return PUGL_SUCCESS;
+}
+
+PuglStatus
+puglSetTransientFor(PuglView* view, PuglNativeWindow parent)
+{
+	if (!view->impl->hwnd) {
+		view->transientParent = parent;
+		return PUGL_SUCCESS;
+	} else {
+		return PUGL_FAILURE;
+	}
 }
 
 const void*

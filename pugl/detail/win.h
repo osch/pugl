@@ -27,7 +27,13 @@
 typedef PIXELFORMATDESCRIPTOR PuglWinPFD;
 
 struct PuglWorldInternalsImpl {
+	bool   initialized;
+	char*  worldClassName;
+	char*  windowClassName;
+	char*  popupClassName;
+	HWND   messageReceiver;
 	double timerFrequency;
+	double nextProcessTime;
 };
 
 struct PuglInternalsImpl {
@@ -71,17 +77,23 @@ static inline unsigned
 puglWinGetWindowFlags(const PuglView* const view)
 {
 	const bool resizable = view->hints[PUGL_RESIZABLE];
+	const bool isPopup   = view->hints[PUGL_IS_POPUP];
 	return (WS_CLIPCHILDREN | WS_CLIPSIBLINGS |
 	        (view->parent
 	         ? WS_CHILD
-	         : (WS_POPUPWINDOW | WS_CAPTION | WS_MINIMIZEBOX |
+//	         : (WS_POPUPWINDOW | WS_CAPTION | WS_MINIMIZEBOX |
+	         : ((isPopup ? (WS_POPUP) 
+	                     : (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX)) |
 	            (resizable ? (WS_SIZEBOX | WS_MAXIMIZEBOX) : 0))));
 }
 
 static inline unsigned
 puglWinGetWindowExFlags(const PuglView* const view)
 {
-	return WS_EX_NOINHERITLAYOUT | (view->parent ? 0u : WS_EX_APPWINDOW);
+	const bool isPopup   = view->hints[PUGL_IS_POPUP];
+	return   WS_EX_NOINHERITLAYOUT | WS_EX_WINDOWEDGE 
+	       | ((!view->parent && !view->transientParent && !isPopup) ? WS_EX_APPWINDOW : 0u)
+	       | ((!view->parent &&  view->transientParent) ? WS_EX_TOOLWINDOW : 0u);
 }
 
 static inline PuglStatus
@@ -90,20 +102,31 @@ puglWinCreateWindow(const PuglView* const view,
                     HWND* const           hwnd,
                     HDC* const            hdc)
 {
-	const char*    className  = (const char*)view->world->className;
+	const char*    className  = (const char*)view->world->impl->windowClassName;
 	const unsigned winFlags   = puglWinGetWindowFlags(view);
 	const unsigned winExFlags = puglWinGetWindowExFlags(view);
+	
+	if (view->hints[PUGL_IS_POPUP]) {
+	    className = (const char*)view->world->impl->popupClassName;
+	}
 
 	// Calculate total window size to accommodate requested view size
 	RECT wr = { (long)view->frame.x, (long)view->frame.y,
-	            (long)view->frame.width, (long)view->frame.height };
+	            (long)view->frame.x + (long)view->frame.width, 
+	            (long)view->frame.y + (long)view->frame.height };
 	AdjustWindowRectEx(&wr, winFlags, FALSE, winExFlags);
-
+	
+	HWND parent;
+	if      (view->parent)          { parent = (HWND)view->parent; }
+	else if (view->transientParent) { parent = (HWND)view->transientParent; }
+	else                            { parent = HWND_DESKTOP; }
+	    
 	// Create window and get drawing context
 	if (!(*hwnd = CreateWindowEx(winExFlags, className, title, winFlags,
 	                             CW_USEDEFAULT, CW_USEDEFAULT,
 	                             wr.right-wr.left, wr.bottom-wr.top,
-	                             (HWND)view->parent, NULL, NULL, NULL))) {
+	                             parent,
+	                             NULL, NULL, NULL))) {
 		return PUGL_CREATE_WINDOW_FAILED;
 	} else if (!(*hdc = GetDC(*hwnd))) {
 		DestroyWindow(*hwnd);

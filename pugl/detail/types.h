@@ -64,6 +64,8 @@ struct PuglViewImpl {
 	uintptr_t          transientParent;
 	PuglHints          hints;
 	PuglRect           frame;
+	int                reqWidth;
+	int                reqHeight;
 	int                minWidth;
 	int                minHeight;
 	int                minAspectX;
@@ -79,6 +81,8 @@ struct PuglWorldImpl {
 	PuglWorldInternals* impl;
 	char*               className;
 	double              startTime;
+	PuglProcessFunc     processFunc;
+	void*               processUserData;
 	size_t              numViews;
 	PuglView**          views;
 };

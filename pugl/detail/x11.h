@@ -17,6 +17,8 @@
 /**
    @file x11.h Shared definitions for X11 implementation.
 */
+#ifndef PUGL_DETAIL_IMPLEMENTATION_X11_H
+#define PUGL_DETAIL_IMPLEMENTATION_X11_H
 
 #include "pugl/detail/implementation.h"
 
@@ -37,6 +39,9 @@ struct PuglWorldInternalsImpl {
 	Display*     display;
 	PuglX11Atoms atoms;
 	XIM          xim;
+	double       nextProcessTime;
+	bool         needsProcessing;
+	int          awake_fds[2];
 };
 
 struct PuglInternalsImpl {
@@ -49,3 +54,5 @@ struct PuglInternalsImpl {
 	PuglEvent    pendingConfigure;
 	PuglEvent    pendingExpose;
 };
+
+#endif // PUGL_DETAIL_IMPLEMENTATION_X11_H
