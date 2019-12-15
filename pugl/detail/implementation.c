@@ -134,6 +134,7 @@ puglFreeView(PuglView* view)
 		}
 	}
 
+	free(view->title);
 	free(view->clipboard.data);
 	puglFreeViewInternals(view);
 	free(view);

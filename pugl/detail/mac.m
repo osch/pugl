@@ -24,6 +24,7 @@
 #include "pugl/detail/implementation.h"
 #include "pugl/detail/mac.h"
 #include "pugl/pugl.h"
+#include "pugl/pugl_stub_backend.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -755,6 +756,12 @@ puglSetClassName(PuglWorld* const world, const char* const name)
 	return PUGL_SUCCESS;
 }
 
+void*
+puglGetNativeWorld(PuglWorld* world)
+{
+	return NULL;
+}
+
 PuglInternals*
 puglInitViewInternals(void)
 {
@@ -887,23 +894,30 @@ puglHideWindow(PuglView* view)
 void
 puglFreeViewInternals(PuglView* view)
 {
-	PuglWrapperView* wrapperView = view->impl->wrapperView;
-	if (wrapperView->urgentTimer) {
-		[wrapperView->urgentTimer invalidate];
-		[wrapperView->urgentTimer release];
-		wrapperView->urgentTimer = NULL;
+	if (view) {
+		if (view->backend) {
+			view->backend->destroy(view);
+		}
+
+		if (view->impl) {
+			PuglWrapperView* wrapperView = view->impl->wrapperView;
+			if (wrapperView->urgentTimer) {
+				[wrapperView->urgentTimer invalidate];
+				[wrapperView->urgentTimer release];
+				wrapperView->urgentTimer = NULL;
+			}
+			[view->impl->wrapperView removeFromSuperview];
+			view->impl->wrapperView->puglview = NULL;
+			if (view->impl->window) {
+				[view->impl->window close];
+			}
+			[view->impl->wrapperView release];
+			if (view->impl->window) {
+				[view->impl->window release];
+			}
+			free(view->impl);
+		}
 	}
-	view->backend->destroy(view);
-	[view->impl->wrapperView removeFromSuperview];
-	view->impl->wrapperView->puglview = NULL;
-	if (view->impl->window) {
-		[view->impl->window close];
-	}
-	[view->impl->wrapperView release];
-	if (view->impl->window) {
-		[view->impl->window release];
-	}
-	free(view->impl);
 }
 
 PuglStatus
@@ -1243,4 +1257,18 @@ puglSetClipboard(PuglView* const   view,
 	              forType:NSStringPboardType];
 
 	return PUGL_SUCCESS;
+}
+
+const PuglBackend*
+puglStubBackend(void)
+{
+	static const PuglBackend backend = {puglStubConfigure,
+	                                    puglStubCreate,
+	                                    puglStubDestroy,
+	                                    puglStubEnter,
+	                                    puglStubLeave,
+	                                    puglStubResize,
+	                                    puglStubGetContext};
+
+	return &backend;
 }

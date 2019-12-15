@@ -80,6 +80,7 @@ typedef enum {
 */
 typedef enum {
 	PUGL_USE_COMPAT_PROFILE,    /**< Use compatible (not core) OpenGL profile */
+	PUGL_USE_DEBUG_CONTEXT,     /**< True to use a debug OpenGL context */
 	PUGL_CONTEXT_VERSION_MAJOR, /**< OpenGL context major version */
 	PUGL_CONTEXT_VERSION_MINOR, /**< OpenGL context minor version */
 	PUGL_RED_BITS,              /**< Number of bits for red channel */
@@ -452,6 +453,16 @@ puglNewWorld(void);
 */
 PUGL_API void
 puglFreeWorld(PuglWorld* world);
+
+/**
+   Return a pointer to the native handle of the world.
+
+   On X11, this returns a pointer to the Display.
+   On OSX, this returns NULL.
+   On Windows, this returns a handle to the calling process module.
+*/
+PUGL_API void*
+puglGetNativeWorld(PuglWorld* world);
 
 /**
    Set the class name of the application.
@@ -860,6 +871,8 @@ puglSetClipboard(PuglView*   view,
 PUGL_API PuglStatus
 puglRequestAttention(PuglView* view);
 
+#ifndef PUGL_DISABLE_DEPRECATED
+
 /**
    @}
    @name Deprecated API
@@ -1069,6 +1082,8 @@ puglWaitForEvent(PuglView* view);
 */
 PUGL_API PUGL_DEPRECATED_BY("puglDispatchEvents") PuglStatus
 puglProcessEvents(PuglView* view);
+
+#endif  /* PUGL_DISABLE_DEPRECATED */
 
 /**
    @}

@@ -21,6 +21,7 @@
 #include "pugl/detail/types.h"
 #include "pugl/detail/win.h"
 #include "pugl/pugl_gl_backend.h"
+#include "pugl/pugl_stub_backend.h"
 
 #include <windows.h>
 
@@ -54,6 +55,7 @@
 
 #define WGL_CONTEXT_CORE_PROFILE_BIT_ARB          0x00000001
 #define WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB 0x00000002
+#define WGL_CONTEXT_DEBUG_BIT_ARB                 0x00000001
 
 typedef HGLRC (*WglCreateContextAttribs)(HDC, HGLRC, const int*);
 typedef BOOL (*WglSwapInterval)(int);
@@ -190,6 +192,9 @@ puglWinGlCreate(PuglView* view)
 	const int contextAttribs[] = {
 		WGL_CONTEXT_MAJOR_VERSION_ARB, view->hints[PUGL_CONTEXT_VERSION_MAJOR],
 		WGL_CONTEXT_MINOR_VERSION_ARB, view->hints[PUGL_CONTEXT_VERSION_MINOR],
+		WGL_CONTEXT_FLAGS_ARB, (view->hints[PUGL_USE_DEBUG_CONTEXT]
+		                        ? WGL_CONTEXT_DEBUG_BIT_ARB
+		                        : 0),
 		WGL_CONTEXT_PROFILE_MASK_ARB,
 		(view->hints[PUGL_USE_COMPAT_PROFILE]
 		 ? WGL_CONTEXT_CORE_PROFILE_BIT_ARB
@@ -268,20 +273,6 @@ puglWinGlLeave(PuglView* view, bool drawing)
 	return PUGL_SUCCESS;
 }
 
-static PuglStatus
-puglWinGlResize(PuglView* PUGL_UNUSED(view),
-                int       PUGL_UNUSED(width),
-                int       PUGL_UNUSED(height))
-{
-	return PUGL_SUCCESS;
-}
-
-static void*
-puglWinGlGetContext(PuglView* PUGL_UNUSED(view))
-{
-	return NULL;
-}
-
 PuglGlFunc
 puglGetProcAddress(const char* name)
 {
@@ -305,8 +296,8 @@ puglGlBackend()
 		puglWinGlDestroy,
 		puglWinGlEnter,
 		puglWinGlLeave,
-		puglWinGlResize,
-		puglWinGlGetContext
+		puglStubResize,
+		puglStubGetContext
 	};
 
 	return &backend;

@@ -185,7 +185,7 @@ const PuglBackend*
 puglCairoBackend(void)
 {
 	static const PuglBackend backend = {
-		puglX11CairoConfigure,
+		puglX11StubConfigure,
 		puglX11CairoCreate,
 		puglX11CairoDestroy,
 		puglX11CairoEnter,

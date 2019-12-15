@@ -55,4 +55,17 @@ struct PuglInternalsImpl {
 	PuglEvent    pendingExpose;
 };
 
+static inline PuglStatus
+puglX11StubConfigure(PuglView* view)
+{
+	PuglInternals* const impl = view->impl;
+	XVisualInfo          pat  = {0};
+	int                  n    = 0;
+
+	pat.screen = impl->screen;
+	impl->vi   = XGetVisualInfo(impl->display, VisualScreenMask, &pat, &n);
+
+	return PUGL_SUCCESS;
+}
+
 #endif // PUGL_DETAIL_IMPLEMENTATION_X11_H

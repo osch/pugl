@@ -22,6 +22,7 @@
 #include "pugl/detail/x11.h"
 #include "pugl/pugl.h"
 #include "pugl/pugl_gl_backend.h"
+#include "pugl/pugl_stub_backend.h"
 
 #include <GL/gl.h>
 #include <GL/glx.h>
@@ -119,6 +120,9 @@ puglX11GlCreate(PuglView* view)
 	const int ctx_attrs[] = {
 		GLX_CONTEXT_MAJOR_VERSION_ARB, view->hints[PUGL_CONTEXT_VERSION_MAJOR],
 		GLX_CONTEXT_MINOR_VERSION_ARB, view->hints[PUGL_CONTEXT_VERSION_MINOR],
+		GLX_CONTEXT_FLAGS_ARB, (view->hints[PUGL_USE_DEBUG_CONTEXT]
+		                        ? GLX_CONTEXT_DEBUG_BIT_ARB
+		                        : 0),
 		GLX_CONTEXT_PROFILE_MASK_ARB, (view->hints[PUGL_USE_COMPAT_PROFILE]
 		                               ? GLX_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB
 		                               : GLX_CONTEXT_CORE_PROFILE_BIT_ARB),
@@ -185,20 +189,6 @@ puglX11GlLeave(PuglView* view, bool drawing)
 	return PUGL_SUCCESS;
 }
 
-static PuglStatus
-puglX11GlResize(PuglView* PUGL_UNUSED(view),
-                int       PUGL_UNUSED(width),
-                int       PUGL_UNUSED(height))
-{
-	return PUGL_SUCCESS;
-}
-
-static void*
-puglX11GlGetContext(PuglView* PUGL_UNUSED(view))
-{
-	return NULL;
-}
-
 PuglGlFunc
 puglGetProcAddress(const char* name)
 {
@@ -213,8 +203,8 @@ const PuglBackend* puglGlBackend(void)
 		puglX11GlDestroy,
 		puglX11GlEnter,
 		puglX11GlLeave,
-		puglX11GlResize,
-		puglX11GlGetContext
+		puglStubResize,
+		puglStubGetContext
 	};
 
 	return &backend;

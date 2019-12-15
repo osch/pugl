@@ -28,7 +28,7 @@
 #include "pugl/detail/types.h"
 #include "pugl/detail/x11.h"
 #include "pugl/pugl.h"
-#include "pugl/pugl_x11.h"
+#include "pugl/pugl_stub_backend.h"
 
 #include <X11/X.h>
 #include <X11/Xatom.h>
@@ -112,6 +112,12 @@ puglInitWorldInternals(void)
 
 	impl->nextProcessTime = -1;
 	return impl;
+}
+
+void*
+puglGetNativeWorld(PuglWorld* world)
+{
+	return world->impl->display;
 }
 
 PuglStatus
@@ -282,11 +288,13 @@ puglHideWindow(PuglView* view)
 void
 puglFreeViewInternals(PuglView* view)
 {
-	if (view) {
+	if (view && view->impl) {
 		if (view->impl->xic) {
 			XDestroyIC(view->impl->xic);
 		}
-		view->backend->destroy(view);
+		if (view->backend) {
+			view->backend->destroy(view);
+		}
 		if (view->impl->display) {
 			XDestroyWindow(view->impl->display, view->impl->win);
 		}
@@ -1073,8 +1081,16 @@ puglSetClipboard(PuglView* const   view,
 	return PUGL_SUCCESS;
 }
 
-Display*
-puglX11GetDisplay(PuglWorld* world)
+const PuglBackend*
+puglStubBackend(void)
 {
-	return world->impl->display;
+	static const PuglBackend backend = {puglX11StubConfigure,
+	                                    puglStubCreate,
+	                                    puglStubDestroy,
+	                                    puglStubEnter,
+	                                    puglStubLeave,
+	                                    puglStubResize,
+	                                    puglStubGetContext};
+
+	return &backend;
 }
