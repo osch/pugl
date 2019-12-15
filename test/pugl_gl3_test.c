@@ -21,17 +21,17 @@
    pixel coordinates for positions and sizes so that things work roughly like a
    typical 2D graphics API.
 
-   The program draws a bunch of rectangles with borders, with one draw call per
-   rectangle (the shader draws the borders).  Rectangle attributes are
-   controlled via uniform variables.  This is certainly not the fastest way to
-   do this: it is probably CPU and/or I/O bound, but serves as a decent very
-   rough benchmark for how many draw calls you can get away with.
+   The program draws a bunch of rectangles with borders, using instancing.
+   Each rectangle has origin, size, and fill color attributes, which are shared
+   for all four vertices.  On each frame, a single buffer with all the
+   rectangle data is sent to the GPU, and everything is drawn with a single
+   draw call.
 
-   A better (if slightly more GPU memory intensive) way to do this would be to
-   put everything in vertex attributes, jam all the rectangle data into a
-   single buffer, and draw the whole thing with a single draw call.  That way
-   would probably be GPU bound instead, and show a difference between alpha
-   blending and depth testing for many overlapped rectangles.
+   This is not particularly realistic or optimal, but serves as a decent rough
+   benchmark for how much simple geometry you can draw.  The number of
+   rectangles can be given on the command line.  For reference, it begins to
+   struggle to maintain 60 FPS on my machine (1950x + Vega64) with more than
+   about 100000 rectangles.
 */
 
 #define GL_SILENCE_DEPRECATION 1
@@ -59,7 +59,6 @@ typedef struct
 	float pos[2];
 	float size[2];
 	float fillColor[4];
-	float borderColor[4];
 } Rect;
 
 // clang-format off
@@ -73,49 +72,6 @@ static const GLfloat rectVertices[] = {
 
 static const GLuint rectIndices[4] = {0, 1, 2, 3};
 
-/* The vertex shader is trivial, but forwards scaled UV coordinates (in pixels)
-   to the fragment shader for drawing the border. */
-static const char* vertexSource = //
-        "#version 330\n"
-        "uniform mat4 MVP;\n"
-        "uniform vec2 u_size;\n"
-        "in vec2 v_position;\n"
-        "noperspective out vec2 f_uv;\n"
-        "void main() {\n"
-        "    f_uv = v_position * u_size;\n"
-        "    gl_Position = MVP * vec4(v_position, 0.0, 1.0);\n"
-        "}\n";
-
-/* The fragment shader uses the UV coordinates to calculate whether it is in
-   the T, R, B, or L border.  These are then mixed with the border color, and
-   their inverse is mixed with the fill color, to calculate the fragment color.
-   For example, if we are in the top border, then T=1, so the border mix factor
-   TRBL=1, and the fill mix factor (1-TRBL) is 0.
-
-   The use of pixel units here is handy because the border width can be
-   specified precisely in pixels to draw sharp lines.  The border width is just
-   hardcoded, but could be made a uniform or vertex attribute easily enough. */
-static const char* fragmentSource = //
-        "#version 330\n"
-        "uniform vec2 u_size;\n"
-        "uniform vec4 u_borderColor;\n"
-        "uniform vec4 u_fillColor;\n"
-        "noperspective in vec2 f_uv;\n"
-        "layout(location = 0) out vec4 FragColor;\n"
-        "void main() {\n"
-        "    const float border_width = 2.0;\n"
-        "\n"
-        "    float t          = step(border_width, f_uv[1]);\n"
-        "    float r          = step(border_width, u_size.x - f_uv[0]);\n"
-        "    float b          = step(border_width, u_size.y - f_uv[1]);\n"
-        "    float l          = step(border_width, f_uv[0]);\n"
-        "    float fill_mix   = t * r * b * l;\n"
-        "    float border_mix = 1.0 - fill_mix;\n"
-        "    vec4  fill       = fill_mix * u_fillColor;\n"
-        "    vec4  border     = border_mix * u_borderColor;\n"
-        "    FragColor        = fill + border;\n"
-        "}\n";
-
 typedef struct
 {
 	PuglTestOptions opts;
@@ -126,11 +82,9 @@ typedef struct
 	Program         drawRect;
 	GLuint          vao;
 	GLuint          vbo;
+	GLuint          instanceVbo;
 	GLuint          ibo;
-	GLint           u_MVP;
-	GLint           u_size;
-	GLint           u_fillColor;
-	GLint           u_borderColor;
+	GLint           u_projection;
 	unsigned        framesDrawn;
 	int             quit;
 } PuglTestApp;
@@ -144,34 +98,6 @@ onConfigure(PuglView* view, double width, double height)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glViewport(0, 0, (int)width, (int)height);
-}
-
-static void
-drawRect(const PuglTestApp* app, const Rect* rect, mat4 projection)
-{
-	/* The vertex data is always the same: a normalized rectangle from (0, 0)
-	   to (1, 1).  We use the MVP matrix to scale and translate this to the
-	   desired screen coordinates. */
-
-	// Construct model matrix to scale/translate to screen coordinates
-	mat4 m;
-	mat4Identity(m);
-	mat4Translate(m, rect->pos[0], rect->pos[1], 0);
-	m[0][0] = rect->size[0];
-	m[1][1] = rect->size[1];
-
-	// Combine them into the final MVP matrix and set uniform
-	mat4 mvp;
-	mat4Mul(mvp, projection, m);
-	glUniformMatrix4fv(app->u_MVP, 1, GL_FALSE, (const GLfloat*)&mvp);
-
-	// Set uniforms for the various rectangle attributes
-	glUniform2fv(app->u_size, 1, rect->size);
-	glUniform4fv(app->u_fillColor, 1, rect->fillColor);
-	glUniform4fv(app->u_borderColor, 1, rect->borderColor);
-
-	// Draw
-	glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, 0);
 }
 
 static void
@@ -195,21 +121,33 @@ onExpose(PuglView* view)
 	glClear(GL_COLOR_BUFFER_BIT);
 	glUseProgram(app->drawRect.program);
 	glBindVertexArray(app->vao);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, app->ibo);
+
+	// Set projection matrix uniform
+	glUniformMatrix4fv(app->u_projection, 1, GL_FALSE, (const GLfloat*)&proj);
 
 	for (size_t i = 0; i < app->numRects; ++i) {
-		Rect* rect = &app->rects[i];
+		Rect*       rect      = &app->rects[i];
+		const float normal    = i / (float)app->numRects;
+		const float offset[2] = {normal * 128.0f, normal * 128.0f};
 
 		// Move rect around in an arbitrary way that looks cool
-		rect->pos[0] = (float)(frame.width - rect->size[0]) *
-		               (sinf((float)time * rect->size[0] / 64.0f) + 1.0f) /
-		               2.0f;
-		rect->pos[1] = (float)(frame.height - rect->size[1]) *
-		               (cosf((float)time * rect->size[1] / 64.0f) + 1.0f) /
-		               2.0f;
-
-		drawRect(app, rect, proj);
+		rect->pos[0] =
+		        (float)(frame.width - rect->size[0] + offset[0]) *
+		        (sinf((float)time * rect->size[0] / 64.0f + normal) + 1.0f) /
+		        2.0f;
+		rect->pos[1] =
+		        (float)(frame.height - rect->size[1] + offset[1]) *
+		        (cosf((float)time * rect->size[1] / 64.0f + normal) + 1.0f) /
+		        2.0f;
 	}
+
+	glBufferSubData(GL_ARRAY_BUFFER,
+	                0,
+	                app->numRects * sizeof(Rect),
+	                app->rects);
+
+	glDrawElementsInstanced(
+	        GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, NULL, app->numRects * 4);
 
 	++app->framesDrawn;
 }
@@ -243,24 +181,42 @@ makeRects(const size_t numRects)
 {
 	const float minSize  = (float)defaultWidth / 64.0f;
 	const float maxSize  = (float)defaultWidth / 6.0f;
-	const float boxAlpha = 0.25f;
+	const float boxAlpha = 0.2f;
 
 	Rect* rects = (Rect*)calloc(numRects, sizeof(Rect));
 	for (size_t i = 0; i < numRects; ++i) {
 		const float s = (sinf(i) / 2.0f + 0.5f);
 		const float c = (cosf(i) / 2.0f + 0.5f);
 
-		rects[i].size[0]        = minSize + s * maxSize;
-		rects[i].size[1]        = minSize + c * maxSize;
-		rects[i].fillColor[1]   = s / 2.0f + 0.25f;
-		rects[i].fillColor[2]   = c / 2.0f + 0.25f;
-		rects[i].fillColor[3]   = boxAlpha;
-		rects[i].borderColor[1] = rects[i].fillColor[1] + 0.4f;
-		rects[i].borderColor[2] = rects[i].fillColor[1] + 0.4f;
-		rects[i].borderColor[3] = boxAlpha;
+		rects[i].size[0]      = minSize + s * maxSize;
+		rects[i].size[1]      = minSize + c * maxSize;
+		rects[i].fillColor[1] = s / 2.0f + 0.25f;
+		rects[i].fillColor[2] = c / 2.0f + 0.25f;
+		rects[i].fillColor[3] = boxAlpha;
 	}
 
 	return rects;
+}
+
+static char*
+loadShader(const char* const path)
+{
+	FILE* const file = fopen(path, "r");
+	if (!file) {
+		logError("Failed to open '%s'\n", path);
+		return NULL;
+	}
+
+	fseek(file, 0, SEEK_END);
+	const long fileSize = ftell(file);
+
+	fseek(file, 0, SEEK_SET);
+	char* source = (char*)calloc(1, fileSize + 1);
+
+	fread(source, 1, fileSize, file);
+	fclose(file);
+
+	return source;
 }
 
 int
@@ -328,8 +284,20 @@ main(int argc, char** argv)
 		return 1;
 	}
 
+	// Load shader sources
+	char* const vertexSource   = loadShader("shaders/rect.vert");
+	char* const fragmentSource = loadShader("shaders/rect.frag");
+	if (!vertexSource || !fragmentSource) {
+		logError("Failed to load shader sources\n");
+		puglFreeView(app.view);
+		puglFreeWorld(app.world);
+		return 1;
+	}
+
 	// Compile rectangle shaders and program
 	app.drawRect = compileProgram(vertexSource, fragmentSource);
+	free(fragmentSource);
+	free(vertexSource);
 	if (!app.drawRect.program) {
 		puglFreeView(app.view);
 		puglFreeWorld(app.world);
@@ -337,11 +305,8 @@ main(int argc, char** argv)
 	}
 
 	// Get location of rectangle shader uniforms
-	app.u_MVP       = glGetUniformLocation(app.drawRect.program, "MVP");
-	app.u_size      = glGetUniformLocation(app.drawRect.program, "u_size");
-	app.u_fillColor = glGetUniformLocation(app.drawRect.program, "u_fillColor");
-	app.u_borderColor =
-	        glGetUniformLocation(app.drawRect.program, "u_borderColor");
+	app.u_projection =
+	        glGetUniformLocation(app.drawRect.program, "u_projection");
 
 	// Generate/bind a VAO to track state
 	glGenVertexArrays(1, &app.vao);
@@ -355,9 +320,42 @@ main(int argc, char** argv)
 	             rectVertices,
 	             GL_STATIC_DRAW);
 
-	// Set up the first/only attribute, position, as 2 floats from the VBO
+	// Attribute 0 is position, 2 floats from the VBO
 	glEnableVertexAttribArray(0);
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), NULL);
+
+	// Generate/bind a VBO to store instance attribute data
+	glGenBuffers(1, &app.instanceVbo);
+	glBindBuffer(GL_ARRAY_BUFFER, app.instanceVbo);
+	glBufferData(GL_ARRAY_BUFFER,
+	             app.numRects * sizeof(Rect),
+	             app.rects,
+	             GL_STREAM_DRAW);
+
+	// Attribute 1 is Rect::position
+	glEnableVertexAttribArray(1);
+	glVertexAttribDivisor(1, 4);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Rect), NULL);
+
+	// Attribute 2 is Rect::size
+	glEnableVertexAttribArray(2);
+	glVertexAttribDivisor(2, 4);
+	glVertexAttribPointer(2,
+	                      2,
+	                      GL_FLOAT,
+	                      GL_FALSE,
+	                      sizeof(Rect),
+	                      (const void*)offsetof(Rect, size));
+
+	// Attribute 3 is Rect::fillColor
+	glEnableVertexAttribArray(3);
+	glVertexAttribDivisor(3, 4);
+	glVertexAttribPointer(3,
+	                      4,
+	                      GL_FLOAT,
+	                      GL_FALSE,
+	                      sizeof(Rect),
+	                      (const void*)offsetof(Rect, fillColor));
 
 	// Set up the IBO to index into the VBO
 	glGenBuffers(1, &app.ibo);
@@ -383,6 +381,7 @@ main(int argc, char** argv)
 	puglEnterContext(app.view, false);
 	glDeleteBuffers(1, &app.ibo);
 	glDeleteBuffers(1, &app.vbo);
+	glDeleteBuffers(1, &app.instanceVbo);
 	glDeleteVertexArrays(1, &app.vao);
 	deleteProgram(app.drawRect);
 	puglLeaveContext(app.view, false);
