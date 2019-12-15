@@ -25,6 +25,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+const char*
+puglStrerror(const PuglStatus status)
+{
+	switch (status) {
+	case PUGL_SUCCESS:               return "Success";
+	case PUGL_FAILURE:               return "Non-fatal failure";
+	case PUGL_UNKNOWN_ERROR:         return "Unknown system error";
+	case PUGL_BAD_BACKEND:           return "Invalid or missing backend";
+	case PUGL_BACKEND_FAILED:        return "Backend initialisation failed";
+	case PUGL_REGISTRATION_FAILED:   return "Window class registration failed";
+	case PUGL_CREATE_WINDOW_FAILED:  return "Window creation failed";
+	case PUGL_SET_FORMAT_FAILED:     return "Failed to set pixel format";
+	case PUGL_CREATE_CONTEXT_FAILED: return "Failed to create drawing context";
+	case PUGL_UNSUPPORTED_TYPE:      return "Unsupported data type";
+	}
+
+	return "Unknown error";
+}
+
 void
 puglSetString(char** dest, const char* string)
 {
@@ -234,22 +253,22 @@ puglDecodeUTF8(const uint8_t* buf)
 	} else if (buf[0] < 0xC2) {
 		return 0xFFFD;
 	} else if (buf[0] < 0xE0) {
-		FAIL_IF((buf[1] & 0xC0) != 0x80);
-		return (buf[0] << 6) + buf[1] - 0x3080u;
+		FAIL_IF((buf[1] & 0xC0u) != 0x80);
+		return (buf[0] << 6u) + buf[1] - 0x3080u;
 	} else if (buf[0] < 0xF0) {
-		FAIL_IF((buf[1] & 0xC0) != 0x80);
+		FAIL_IF((buf[1] & 0xC0u) != 0x80);
 		FAIL_IF(buf[0] == 0xE0 && buf[1] < 0xA0);
-		FAIL_IF((buf[2] & 0xC0) != 0x80);
-		return (buf[0] << 12) + (buf[1] << 6) + buf[2] - 0xE2080u;
+		FAIL_IF((buf[2] & 0xC0u) != 0x80);
+		return (buf[0] << 12u) + (buf[1] << 6u) + buf[2] - 0xE2080u;
 	} else if (buf[0] < 0xF5) {
-		FAIL_IF((buf[1] & 0xC0) != 0x80);
+		FAIL_IF((buf[1] & 0xC0u) != 0x80);
 		FAIL_IF(buf[0] == 0xF0 && buf[1] < 0x90);
 		FAIL_IF(buf[0] == 0xF4 && buf[1] >= 0x90);
-		FAIL_IF((buf[2] & 0xC0) != 0x80);
-		FAIL_IF((buf[3] & 0xC0) != 0x80);
-		return ((buf[0] << 18) +
-		        (buf[1] << 12) +
-		        (buf[2] << 6) +
+		FAIL_IF((buf[2] & 0xC0u) != 0x80u);
+		FAIL_IF((buf[3] & 0xC0u) != 0x80u);
+		return ((buf[0] << 18u) +
+		        (buf[1] << 12u) +
+		        (buf[2] << 6u) +
 		        buf[3] - 0x3C82080u);
 	}
 	return 0xFFFD;

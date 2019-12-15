@@ -21,13 +21,10 @@
 #include "test_utils.h"
 
 #include "pugl/pugl.h"
-#include "pugl/pugl_stub_backend.h"
+#include "pugl/pugl_stub.h"
 
-#include <math.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 
 typedef struct
 {
@@ -65,8 +62,7 @@ main(void)
 	puglSetEventFunc(app.view, onEvent);
 
 	if (puglCreateWindow(app.view, "Pugl Event Printer")) {
-		fprintf(stderr, "error: Failed to create window\n");
-		return 1;
+		return logError("Failed to create window\n");
 	}
 
 	puglShowWindow(app.view);

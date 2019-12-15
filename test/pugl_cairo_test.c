@@ -21,14 +21,13 @@
 #include "test_utils.h"
 
 #include "pugl/pugl.h"
-#include "pugl/pugl_cairo_backend.h"
+#include "pugl/pugl_cairo.h"
 
 #include <cairo.h>
 
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 
 static PuglWorld* world = NULL;
 PuglTestOptions   opts  = {0};
@@ -228,8 +227,9 @@ main(int argc, char** argv)
 	puglSetViewHint(view, PUGL_IGNORE_KEY_REPEAT, opts.ignoreKeyRepeat);
 	puglSetEventFunc(view, onEvent);
 
-	if (puglCreateWindow(view, "Pugl Test")) {
-		return 1;
+	PuglStatus st = puglCreateWindow(view, "Pugl Test");
+	if (st) {
+		return logError("Failed to create window (%s)\n", puglStrerror(st));
 	}
 
 	puglShowWindow(view);

@@ -37,7 +37,7 @@ extern "C" {
 
 /** Set `blob` to `data` with length `len`, reallocating if necessary. */
 PUGL_API_PRIVATE
-void puglSetBlob(PuglBlob* blob, const void* data, size_t len);
+void puglSetBlob(PuglBlob* dest, const void* data, size_t len);
 
 /** Reallocate and set `*dest` to `string`. */
 PUGL_API_PRIVATE

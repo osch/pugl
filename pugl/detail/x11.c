@@ -28,7 +28,7 @@
 #include "pugl/detail/types.h"
 #include "pugl/detail/x11.h"
 #include "pugl/pugl.h"
-#include "pugl/pugl_stub_backend.h"
+#include "pugl/pugl_stub.h"
 
 #include <X11/X.h>
 #include <X11/Xatom.h>
@@ -41,7 +41,6 @@
 
 #include <unistd.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -65,7 +64,8 @@ enum WmClientStateMessageAction {
 };
 
 static const long eventMask =
-	(ExposureMask | StructureNotifyMask | FocusChangeMask |
+	(ExposureMask | StructureNotifyMask |
+	 VisibilityChangeMask | FocusChangeMask |
 	 EnterWindowMask | LeaveWindowMask | PointerMotionMask |
 	 ButtonPressMask | ButtonReleaseMask | KeyPressMask | KeyReleaseMask);
 
@@ -136,19 +136,18 @@ puglInitViewInternals(void)
 PuglStatus
 puglPollEvents(PuglWorld* world, const double timeout0)
 {
-	PuglWorldInternals* impl = world->impl;
-	XFlush(impl->display);
-
-	if (XEventsQueued(impl->display, QueuedAlready)) {
+	if (XPending(world->impl->display) > 0) {
 		return PUGL_SUCCESS;
 	}
+	PuglWorldInternals* impl = world->impl;
+
 	const int fd   = ConnectionNumber(impl->display);
 	const int afd  = impl->awake_fds[0];
 	int nfds = (fd > afd ? fd : afd) + 1;
 	int       ret  = 0;
 	fd_set    fds;
-	FD_ZERO(&fds);
-	FD_SET(fd,  &fds);
+	FD_ZERO(&fds); // NOLINT
+	FD_SET(fd, &fds);
 	if (afd >= 0) {
 		FD_SET(afd, &fds);
 	}
@@ -327,7 +326,6 @@ puglShowWindow(PuglView* view)
 {
 	XMapRaised(view->impl->display, view->impl->win);
 	puglPostRedisplay(view);
-	view->visible = true;
 	return PUGL_SUCCESS;
 }
 
@@ -335,7 +333,6 @@ PuglStatus
 puglHideWindow(PuglView* view)
 {
 	XUnmapWindow(view->impl->display, view->impl->win);
-	view->visible = false;
 	return PUGL_SUCCESS;
 }
 
@@ -495,6 +492,9 @@ translateEvent(PuglView* view, XEvent xevent)
 			}
 		}
 		break;
+	case VisibilityNotify:
+		view->visible = xevent.xvisibility.state != VisibilityFullyObscured;
+		break;
 	case MapNotify: {
 		break;
 		/*
@@ -508,6 +508,9 @@ translateEvent(PuglView* view, XEvent xevent)
 		printf("Map %d %d\n", attrs.x, attrs.y);
 		break;*/
 	}
+	case UnmapNotify:
+		view->visible = false;
+		break;
 	case ConfigureNotify:
 		event.type             = PUGL_CONFIGURE;
 		event.configure.x      = xevent.xconfigure.x;
@@ -807,7 +810,7 @@ puglDispatchEvents(PuglWorld* world)
 			unsigned long len  = 0;
 			unsigned long left = 0;
 			XGetWindowProperty(impl->display, impl->win, XA_PRIMARY,
-			                   0, 8, False, AnyPropertyType,
+			                   0, 0x1FFFFFFF, False, AnyPropertyType,
 			                   &type, &fmt, &len, &left, &str);
 
 			if (str && fmt == 8 && type == atoms->UTF8_STRING && left == 0) {
@@ -933,7 +936,9 @@ puglPostRedisplayRect(PuglView* view, PuglRect rect)
 	                   w, h,
 	                   0};
 
-	XSendEvent(view->impl->display, view->impl->win, False, 0, (XEvent*)&ev);
+	if (view->visible) {
+		XSendEvent(view->impl->display, view->impl->win, False, 0, (XEvent*)&ev);
+	}
 
 	return PUGL_SUCCESS;
 }

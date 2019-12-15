@@ -43,11 +43,10 @@
 
 #include "pugl/gl.h"
 #include "pugl/pugl.h"
-#include "pugl/pugl_gl_backend.h"
+#include "pugl/pugl_gl.h"
 
 #include <math.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -203,10 +202,10 @@ onExpose(PuglView* view)
 
 		// Move rect around in an arbitrary way that looks cool
 		rect->pos[0] = (float)(frame.width - rect->size[0]) *
-		               (sinf((float)time * rect->size[0] / 100.0f) + 1.0f) /
+		               (sinf((float)time * rect->size[0] / 64.0f) + 1.0f) /
 		               2.0f;
 		rect->pos[1] = (float)(frame.height - rect->size[1]) *
-		               (cosf((float)time * rect->size[1] / 100.0f) + 1.0f) /
+		               (cosf((float)time * rect->size[1] / 64.0f) + 1.0f) /
 		               2.0f;
 
 		drawRect(app, rect, proj);
@@ -240,23 +239,22 @@ onEvent(PuglView* view, const PuglEvent* event)
 }
 
 static Rect*
-makeRects(const size_t numRects, const int width, const int height)
+makeRects(const size_t numRects)
 {
-	const int   minSize  = width / 32;
-	const int   maxSize  = width / 4;
-	const float boxAlpha = 0.6f;
+	const float minSize  = (float)defaultWidth / 64.0f;
+	const float maxSize  = (float)defaultWidth / 6.0f;
+	const float boxAlpha = 0.25f;
 
 	Rect* rects = (Rect*)calloc(numRects, sizeof(Rect));
 	for (size_t i = 0; i < numRects; ++i) {
-		rects[i].pos[0]  = (float)(rand() % width);
-		rects[i].pos[1]  = (float)(rand() % height);
-		rects[i].size[0] = (float)minSize + rand() % (maxSize - minSize);
-		rects[i].size[1] = (float)minSize + rand() % (maxSize - minSize);
+		const float s = (sinf(i) / 2.0f + 0.5f);
+		const float c = (cosf(i) / 2.0f + 0.5f);
 
-		rects[i].fillColor[1] = (rand() % numRects) / ((float)numRects - 0.4f);
-		rects[i].fillColor[2] = (rand() % numRects) / ((float)numRects - 0.4f);
-		rects[i].fillColor[3] = boxAlpha;
-
+		rects[i].size[0]        = minSize + s * maxSize;
+		rects[i].size[1]        = minSize + c * maxSize;
+		rects[i].fillColor[1]   = s / 2.0f + 0.25f;
+		rects[i].fillColor[2]   = c / 2.0f + 0.25f;
+		rects[i].fillColor[3]   = boxAlpha;
 		rects[i].borderColor[1] = rects[i].fillColor[1] + 0.4f;
 		rects[i].borderColor[2] = rects[i].fillColor[1] + 0.4f;
 		rects[i].borderColor[3] = boxAlpha;
@@ -294,7 +292,7 @@ main(int argc, char** argv)
 	// Create world, view, and rect data
 	app.world = puglNewWorld();
 	app.view  = puglNewView(app.world);
-	app.rects = makeRects(app.numRects, defaultWidth, defaultHeight);
+	app.rects = makeRects(app.numRects);
 
 	// Set up world and view
 	puglSetClassName(app.world, "PuglGL3Test");
@@ -303,6 +301,7 @@ main(int argc, char** argv)
 	puglSetAspectRatio(app.view, 1, 1, 16, 9);
 	puglSetBackend(app.view, puglGlBackend());
 	puglSetViewHint(app.view, PUGL_USE_COMPAT_PROFILE, PUGL_FALSE);
+	puglSetViewHint(app.view, PUGL_USE_DEBUG_CONTEXT, app.opts.errorChecking);
 	puglSetViewHint(app.view, PUGL_CONTEXT_VERSION_MAJOR, 3);
 	puglSetViewHint(app.view, PUGL_CONTEXT_VERSION_MINOR, 3);
 	puglSetViewHint(app.view, PUGL_RESIZABLE, app.opts.resizable);
@@ -313,9 +312,9 @@ main(int argc, char** argv)
 	puglSetHandle(app.view, &app);
 	puglSetEventFunc(app.view, onEvent);
 
-	if (puglCreateWindow(app.view, "Pugl OpenGL 3")) {
-		fprintf(stderr, "error: Failed to create window\n");
-		return 1;
+	const PuglStatus st = puglCreateWindow(app.view, "Pugl OpenGL 3");
+	if (st) {
+		return logError("Failed to create window (%s)\n", puglStrerror(st));
 	}
 
 	// Enter context to set up GL stuff
@@ -323,7 +322,7 @@ main(int argc, char** argv)
 
 	// Load GL functions via GLAD
 	if (!gladLoadGLLoader((GLADloadproc)&puglGetProcAddress)) {
-		fprintf(stderr, "error: Failed to load GL\n");
+		logError("Failed to load GL\n");
 		puglFreeView(app.view);
 		puglFreeWorld(app.world);
 		return 1;

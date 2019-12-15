@@ -24,7 +24,7 @@
 #include "pugl/detail/implementation.h"
 #include "pugl/detail/mac.h"
 #include "pugl/pugl.h"
-#include "pugl/pugl_stub_backend.h"
+#include "pugl/pugl_stub.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -757,7 +757,7 @@ puglSetClassName(PuglWorld* const world, const char* const name)
 }
 
 void*
-puglGetNativeWorld(PuglWorld* world)
+puglGetNativeWorld(PuglWorld* PUGL_UNUSED(world))
 {
 	return NULL;
 }
@@ -1065,23 +1065,6 @@ PuglStatus
 puglProcessEvents(PuglView* view)
 {
 	return puglDispatchEvents(view->world);
-}
-
-PuglGlFunc
-puglGetProcAddress(const char *name)
-{
-	CFBundleRef framework =
-		CFBundleGetBundleWithIdentifier(CFSTR("com.apple.opengl"));
-
-	CFStringRef symbol = CFStringCreateWithCString(
-		kCFAllocatorDefault, name, kCFStringEncodingASCII);
-
-	PuglGlFunc func = (PuglGlFunc)CFBundleGetFunctionPointerForName(
-		framework, symbol);
-
-	CFRelease(symbol);
-
-	return func;
 }
 
 double

@@ -24,7 +24,7 @@
 
 #include "pugl/gl.h"
 #include "pugl/pugl.h"
-#include "pugl/pugl_gl_backend.h"
+#include "pugl/pugl_gl.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -70,6 +70,8 @@ onReshape(PuglView* view, int width, int height)
 {
 	(void)view;
 
+	const float aspect = (float)width / (float)height;
+
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_LESS);
 	glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
@@ -79,7 +81,7 @@ onReshape(PuglView* view, int width, int height)
 	glViewport(0, 0, width, height);
 
 	float projection[16];
-	perspective(projection, 1.8f, width / (float)height, 1.0, 100.0f);
+	perspective(projection, 1.8f, aspect, 1.0f, 100.0f);
 	glLoadMatrixf(projection);
 }
 
@@ -315,6 +317,7 @@ main(int argc, char** argv)
 	puglSetAspectRatio(app.parent, 1, 1, 16, 9);
 	puglSetBackend(app.parent, puglGlBackend());
 
+	puglSetViewHint(app.parent, PUGL_USE_DEBUG_CONTEXT, opts.errorChecking);
 	puglSetViewHint(app.parent, PUGL_RESIZABLE, opts.resizable);
 	puglSetViewHint(app.parent, PUGL_SAMPLES, opts.samples);
 	puglSetViewHint(app.parent, PUGL_DOUBLE_BUFFER, opts.doubleBuffer);
@@ -323,16 +326,18 @@ main(int argc, char** argv)
 	puglSetHandle(app.parent, &app);
 	puglSetEventFunc(app.parent, onParentEvent);
 
+	PuglStatus st         = PUGL_SUCCESS;
 	const uint8_t title[] = { 'P', 'u', 'g', 'l', ' ',
 	                          'P', 'r', 0xC3, 0xBC, 'f', 'u', 'n', 'g', 0 };
-	if (puglCreateWindow(app.parent, (const char*)title)) {
-		fprintf(stderr, "error: Failed to create parent window\n");
-		return 1;
+	if ((st = puglCreateWindow(app.parent, (const char*)title))) {
+		return logError("Failed to create parent window (%s)\n",
+		                puglStrerror(st));
 	}
 
 	puglSetFrame(app.child, getChildFrame(parentFrame));
 	puglSetParentWindow(app.child, puglGetNativeWindow(app.parent));
 
+	puglSetViewHint(app.child, PUGL_USE_DEBUG_CONTEXT, opts.errorChecking);
 	puglSetViewHint(app.child, PUGL_SAMPLES, opts.samples);
 	puglSetViewHint(app.child, PUGL_DOUBLE_BUFFER, opts.doubleBuffer);
 	puglSetViewHint(app.child, PUGL_SWAP_INTERVAL, 0);
@@ -341,10 +346,9 @@ main(int argc, char** argv)
 	puglSetHandle(app.child, &app);
 	puglSetEventFunc(app.child, onEvent);
 
-	const int st = puglCreateWindow(app.child, NULL);
-	if (st) {
-		fprintf(stderr, "error: Failed to create child window (%d)\n", st);
-		return 1;
+	if ((st = puglCreateWindow(app.child, NULL))) {
+		return logError("Failed to create child window (%s)\n",
+		                puglStrerror(st));
 	}
 
 	puglShowWindow(app.parent);

@@ -17,6 +17,7 @@
 #include "pugl/pugl.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +34,7 @@ typedef struct {
 	bool ignoreKeyRepeat;
 	bool resizable;
 	bool verbose;
+	bool errorChecking;
 } PuglTestOptions;
 
 typedef float vec4[4];
@@ -155,6 +157,19 @@ perspective(float* m, float fov, float aspect, float zNear, float zFar)
 }
 
 static inline int
+logError(const char* fmt, ...)
+{
+	fprintf(stderr, "error: ");
+
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(stderr, fmt, args);
+	va_end(args);
+
+	return 1;
+}
+
+static inline int
 printModifiers(const uint32_t mods)
 {
 	return fprintf(stderr, "Modifiers:%s%s%s%s\n",
@@ -215,10 +230,10 @@ printEvent(const PuglEvent* event, const char* prefix, const bool verbose)
 		switch (event->type) {
 		case PUGL_CONFIGURE:
 			return fprintf(stderr, "%sConfigure " PFMT " " PFMT "\n", prefix,
-			               event->expose.x,
-			               event->expose.y,
-			               event->expose.width,
-			               event->expose.height);
+			               event->configure.x,
+			               event->configure.y,
+			               event->configure.width,
+			               event->configure.height);
 		case PUGL_EXPOSE:
 			return fprintf(stderr,
 			               "%sExpose    " PFMT " " PFMT "\n", prefix,
@@ -248,6 +263,7 @@ puglPrintTestUsage(const char* prog, const char* posHelp)
 	       "  -a  Enable anti-aliasing\n"
 	       "  -c  Continuously animate and draw\n"
 	       "  -d  Enable double-buffering\n"
+	       "  -e  Enable platform error-checking\n"
 	       "  -h  Display this help\n"
 	       "  -i  Ignore key repeat\n"
 	       "  -v  Print verbose output\n"
@@ -258,7 +274,7 @@ puglPrintTestUsage(const char* prog, const char* posHelp)
 static inline PuglTestOptions
 puglParseTestOptions(int* pargc, char*** pargv)
 {
-	PuglTestOptions opts = { 0, 0, false, false, false, false, false };
+	PuglTestOptions opts = { 0, 0, false, false, false, false, false, false };
 
 	char** const argv = *pargv;
 	int          i    = 1;
@@ -269,6 +285,8 @@ puglParseTestOptions(int* pargc, char*** pargv)
 			opts.continuous = true;
 		} else if (!strcmp(argv[i], "-d")) {
 			opts.doubleBuffer = PUGL_TRUE;
+		} else if (!strcmp(argv[i], "-e")) {
+			opts.errorChecking = PUGL_TRUE;
 		} else if (!strcmp(argv[i], "-h")) {
 			opts.help = true;
 			return opts;
@@ -282,7 +300,7 @@ puglParseTestOptions(int* pargc, char*** pargv)
 			break;
 		} else {
 			opts.help = true;
-			fprintf(stderr, "error: Unknown option: %s\n", argv[i]);
+			logError("Unknown option: %s\n", argv[i]);
 		}
 	}
 
