@@ -71,28 +71,44 @@ updateViewRect(PuglView* view)
 }
 @end
 
+static void
+releaseProcessTimer(PuglWorldInternals* impl)
+{
+    if (impl->processTimer) {
+         [impl->processTimer invalidate];
+         [impl->processTimer release];
+         impl->processTimer = NULL;
+    }
+}
+
+static void
+rescheduleProcessTimer(PuglWorld* world)
+{
+    PuglWorldInternals* impl = world->impl;
+    releaseProcessTimer(impl);
+    if (impl->nextProcessTime >= 0) {
+        impl->processTimer =
+                [[NSTimer scheduledTimerWithTimeInterval:impl->nextProcessTime - puglGetTime(world)
+                                                  target:world->impl->worldProxy
+                                                selector:@selector(processTimerCallback)
+                                                userInfo:nil
+                                                 repeats:NO] retain];
+    }
+
+}
+
 @implementation PuglWorldProxy
 - (void) processTimerCallback
 {
 	if (world) {
-		if (world->impl->processTimer) {
-			[world->impl->processTimer invalidate];
-			[world->impl->processTimer release];
-			world->impl->processTimer = NULL;
-		}
 		PuglWorldInternals* impl = world->impl;
-		double current = puglGetTime(world);
-		if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= current) {
-			impl->nextProcessTime = -1;
-			if (world->processFunc) world->processFunc(world, world->processUserData);
+		if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= puglGetTime(world)) {
+		    releaseProcessTimer(impl);
+		    impl->nextProcessTime = -1;
+		    if (world->processFunc) world->processFunc(world, world->processUserData);
 		}
-		if (impl->nextProcessTime >= 0) {
-			world->impl->processTimer =
-				[[NSTimer scheduledTimerWithTimeInterval:impl->nextProcessTime - current
-					                                 target:world->impl->worldProxy
-					                               selector:@selector(processTimerCallback)
-					                               userInfo:nil
-				        	                        repeats:NO] retain];
+		else {
+		   rescheduleProcessTimer(world);
 		}
 	}
 
@@ -690,7 +706,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 	PuglEvent ev = { 0 };
 	ev.type = PUGL_CLOSE;
 	puglDispatchEvent(window->puglview, &ev);
-	return YES;
+	return NO;
 }
 
 - (void) windowDidMove:(NSNotification*)notification
@@ -744,12 +760,9 @@ puglInitWorldInternals(void)
 void
 puglFreeWorldInternals(PuglWorld* world)
 {
-	if (world->impl->processTimer) {
-		[world->impl->processTimer invalidate];
-		[world->impl->processTimer release];
-		world->impl->processTimer = NULL;
-	}
+	releaseProcessTimer(world->impl);
 	if (world->impl->worldProxy) {
+                [world->impl->worldProxy setPuglWorld: NULL];
 		[world->impl->worldProxy release];
 		world->impl->worldProxy = NULL;
 	}
@@ -837,6 +850,9 @@ puglCreateWindow(PuglView* view, const char* title)
 		unsigned style = (NSClosableWindowMask |
 		                  NSTitledWindowMask |
 		                  NSMiniaturizableWindowMask );
+		if (view->hints[PUGL_IS_POPUP]) {
+			style = NSWindowStyleMaskBorderless;
+		}
 		if (view->hints[PUGL_RESIZABLE]) {
 			style |= NSResizableWindowMask;
 		}
@@ -863,14 +879,13 @@ puglCreateWindow(PuglView* view, const char* title)
 			[window setContentAspectRatio:NSMakeSize(view->minAspectX,
 			                                         view->minAspectY)];
 		}
-		if (!view->hints[PUGL_RESIZABLE]) {
-			[window setContentMinSize:NSMakeSize(view->reqWidth,
-			                                     view->reqHeight)];
-			[window setContentMaxSize:NSMakeSize(view->reqWidth,
-			                                     view->reqHeight)];
-		}
 
 		[window setContentView:impl->wrapperView];
+		
+		if (view->hints[PUGL_IS_POPUP]) {
+			[window setLevel:NSPopUpMenuWindowLevel];
+			[window setHasShadow:YES];
+		}
 	}
 
 	[impl->wrapperView updateTrackingAreas];
@@ -882,6 +897,12 @@ PuglStatus
 puglShowWindow(PuglView* view)
 {
 	NSWindow* window = view->impl->window;
+        if (!view->impl->displayed) {
+            view->impl->displayed = true;
+            if (!view->impl->posRequested) {
+                [window center];
+            }
+        }
 	[window setIsVisible:YES];
      	[view->world->impl->app activateIgnoringOtherApps:YES];
      	[window makeFirstResponder:view->impl->wrapperView];
@@ -913,6 +934,10 @@ puglFreeViewInternals(PuglView* view)
 				[wrapperView->urgentTimer invalidate];
 				[wrapperView->urgentTimer release];
 				wrapperView->urgentTimer = NULL;
+			}
+			if (wrapperView->markedText) {
+			    [wrapperView->markedText release];
+			    wrapperView->markedText = NULL;
 			}
 			[view->impl->wrapperView removeFromSuperview];
 			view->impl->wrapperView->puglview = NULL;
@@ -974,9 +999,15 @@ puglSetProcessFunc(PuglWorld* world, PuglProcessFunc processFunc, void* userData
 {
 	world->processFunc     = processFunc;
 	world->processUserData = userData;
-	if (!world->impl->worldProxy) {
-		world->impl->worldProxy = [[PuglWorldProxy alloc] init];
-		[world->impl->worldProxy setPuglWorld: world];
+	if (processFunc) {
+	    if (!world->impl->worldProxy) {
+	        world->impl->worldProxy = [[PuglWorldProxy alloc] init];
+	    }
+	    [world->impl->worldProxy setPuglWorld: world];
+	} else {
+	    if (world->impl->worldProxy) {
+	        [world->impl->worldProxy setPuglWorld: NULL];
+	    }
 	}
 }
 
@@ -984,31 +1015,16 @@ puglSetProcessFunc(PuglWorld* world, PuglProcessFunc processFunc, void* userData
 void
 puglSetNextProcessTime(PuglWorld* world, double seconds)
 {
-// TODO
 	if (seconds >= 0) {
 		world->impl->nextProcessTime = puglGetTime(world) + seconds;
 		if (!world->impl->worldProxy) {
 			world->impl->worldProxy = [[PuglWorldProxy alloc] init];
 			[world->impl->worldProxy setPuglWorld: world];
 		}
-
-		if (world->impl->processTimer) {
-			[world->impl->processTimer invalidate];
-			[world->impl->processTimer release];
-		}
-		world->impl->processTimer =
-			[[NSTimer scheduledTimerWithTimeInterval:seconds
-				                                 target:world->impl->worldProxy
-				                               selector:@selector(processTimerCallback)
-				                               userInfo:nil
-			        	                        repeats:NO] retain];
+		rescheduleProcessTimer(world);
 	} else {
 		world->impl->nextProcessTime = -1;
-		if (world->impl->processTimer) {
-			[world->impl->processTimer invalidate];
-			[world->impl->processTimer release];
-			world->impl->processTimer = NULL;
-		}
+		releaseProcessTimer(world->impl);
 	}
 }
 
@@ -1043,6 +1059,7 @@ puglAwake(PuglWorld* world)
 		[world->impl->worldProxy performSelectorOnMainThread:@selector(awakeCallback)
 		                                          withObject:nil
 		                                       waitUntilDone:NO];
+	
 	}
 	[localPool release];
 }
@@ -1125,6 +1142,7 @@ puglSetFrame(PuglView* view, const PuglRect frame)
 {
 	view->reqWidth  = (int)frame.width;
 	view->reqHeight = (int)frame.height;
+	view->impl->posRequested = true;
 
 	PuglInternals* const impl = view->impl;
 

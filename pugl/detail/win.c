@@ -1026,20 +1026,6 @@ puglPostRedisplayRect(PuglView* view, const PuglRect rect)
 	return PUGL_SUCCESS;
 }
 
-PuglStatus
-puglPostRedisplayRect(PuglView* view, PuglRect rect)
-{
-	if (!view->redisplay) {
-		RECT r;
-		r.left   = (long) floor(rect.x);
-		r.top    = (long) floor(rect.y);
-		r.right  = (long) ceil (rect.x + rect.width);
-		r.bottom = (long) ceil (rect.y + rect.height);
-		InvalidateRect(view->impl->hwnd, &r, false);
-	}
-	return PUGL_SUCCESS;
-}
-
 PuglNativeWindow
 puglGetNativeWindow(PuglView* view)
 {

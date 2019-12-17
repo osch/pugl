@@ -67,6 +67,8 @@ struct PuglInternalsImpl {
 	NSView*          drawView;
 	id               window;
 	uint32_t         mods;
+	bool             posRequested;
+	bool             displayed;
 };
 
 #endif // PUGL_DETAIL_MAC_H
