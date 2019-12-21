@@ -88,6 +88,12 @@ puglWideCharToUtf8(const wchar_t* const wstr, size_t* len)
 	return NULL;
 }
 
+PuglStatus
+puglInitApplication(PuglApplicationFlags PUGL_UNUSED(flags))
+{
+	return PUGL_SUCCESS;
+}
+
 PuglWorldInternals*
 puglInitWorldInternals(void)
 {
