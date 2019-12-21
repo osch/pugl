@@ -259,6 +259,10 @@ puglPollEvents(PuglWorld* world, const double timeout)
 	if (!world->impl->initialized && !puglInitWorldInternals2(world)) {
 		return PUGL_FAILURE;
 	}
+	DWORD hasMsg = GetQueueStatus(QS_ALLEVENTS);
+	if (hasMsg) {
+		return PUGL_SUCCESS;
+	}
 
 	if (timeout < 0) {
 		WaitMessage();

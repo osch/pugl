@@ -76,6 +76,7 @@ puglInitWorldInternals(void)
 	if (!display) {
 		return NULL;
 	}
+	//XSynchronize(display, True); // for debugging
 
 	PuglWorldInternals* impl = (PuglWorldInternals*)calloc(
 		1, sizeof(PuglWorldInternals));

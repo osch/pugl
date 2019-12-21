@@ -32,24 +32,9 @@
 #include <stdlib.h>
 
 typedef struct  {
-	cairo_surface_t* back;
-	cairo_t*         backCr;
-	cairo_surface_t* front;
-	cairo_t*         frontCr;
+	cairo_surface_t* crSurface;
+	cairo_t*         crContext;
 } PuglX11CairoSurface;
-
-static PuglStatus
-puglX11CairoConfigure(PuglView* view)
-{
-	PuglInternals* const impl = view->impl;
-
-	XVisualInfo pat;
-	int         n;
-	pat.screen = impl->screen;
-	impl->vi = XGetVisualInfo(impl->display, VisualScreenMask, &pat, &n);
-
-	return PUGL_SUCCESS;
-}
 
 static void
 puglX11CairoClose(PuglView* view)
@@ -58,21 +43,13 @@ puglX11CairoClose(PuglView* view)
 	PuglX11CairoSurface* const surface = (PuglX11CairoSurface*)impl->surface;
 
 	if (surface) {
-		if (surface->frontCr) {
-			cairo_destroy(surface->frontCr);
-			surface->frontCr = NULL;
+		if (surface->crContext) {
+			cairo_destroy(surface->crContext);
+			surface->crContext = NULL;
 		}
-		if (surface->front) {
-			cairo_surface_destroy(surface->front);
-			surface->front = NULL;
-		}
-		if (surface->backCr) {
-			cairo_destroy(surface->backCr);
-			surface->backCr = NULL;
-		}
-		if (surface->back) {
-			cairo_surface_destroy(surface->back);
-			surface->back = NULL;
+		if (surface->crSurface) {
+			cairo_surface_destroy(surface->crSurface);
+			surface->crSurface = NULL;
 		}
 	}
 }
@@ -85,20 +62,14 @@ puglX11CairoOpen(PuglView* view)
 
 	puglX11CairoClose(view); // just to be sure
 	
-	surface->back = cairo_xlib_surface_create(
+	surface->crSurface = cairo_xlib_surface_create(
 		impl->display, impl->win, impl->vi->visual, 
 		view->frame.width, view->frame.height);
 	
-	if (surface->back) {
-		surface->backCr = cairo_create(surface->back);
-		surface->front = cairo_surface_create_similar(
-			surface->back, CAIRO_CONTENT_COLOR_ALPHA, 
-			view->frame.width, view->frame.height);
+	if (surface->crSurface) {
+		surface->crContext = cairo_create(surface->crSurface);
 	}
-	if (surface->front) {
-		surface->frontCr = cairo_create(surface->front);
-	}
-	if (surface->frontCr) {
+	if (surface->crContext) {
 		return PUGL_SUCCESS;
 	} else {
 		puglX11CairoClose(view);
@@ -110,19 +81,8 @@ static PuglStatus
 puglX11CairoCreate(PuglView* view)
 {
 	PuglInternals* const impl    = view->impl;
-	const int            width   = (int)view->frame.width;
-	const int            height  = (int)view->frame.height;
-	PuglX11CairoSurface  surface = { 0 };
-
-	surface.back    = NULL;
-	surface.backCr  = NULL;
-	surface.front   = NULL;
-	surface.frontCr = NULL;
-
-	cairo_status_t st = CAIRO_STATUS_SUCCESS;
 
 	impl->surface = calloc(1, sizeof(PuglX11CairoSurface));
-	*(PuglX11CairoSurface*)impl->surface = surface;
 
 	return PUGL_SUCCESS;
 }
@@ -153,9 +113,9 @@ puglX11CairoLeave(PuglView* view, bool drawing)
 	PuglInternals* const       impl    = view->impl;
 	PuglX11CairoSurface* const surface = (PuglX11CairoSurface*)impl->surface;
 
-	if (drawing && surface->frontCr) {
-		cairo_set_source_surface(surface->backCr, surface->front, 0, 0);
-		cairo_paint(surface->backCr);
+	if (drawing && surface->crContext) {
+		cairo_pop_group_to_source(surface->crContext);
+		cairo_paint(surface->crContext);
 	}
 	puglX11CairoClose(view);
 
@@ -175,10 +135,13 @@ puglX11CairoGetContext(PuglView* view)
 	PuglInternals* const       impl    = view->impl;
 	PuglX11CairoSurface* const surface = (PuglX11CairoSurface*)impl->surface;
 
-	if (!surface->frontCr) {
+	if (!surface->crContext) {
 		puglX11CairoOpen(view);
+		if (surface->crContext) {
+			cairo_push_group_with_content(surface->crContext, CAIRO_CONTENT_COLOR_ALPHA);
+		}
 	}
-	return surface->frontCr;
+	return surface->crContext;
 }
 
 const PuglBackend*
