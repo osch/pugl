@@ -90,6 +90,16 @@
 	[wrapper dispatchExpose:rect];
 }
 
+- (BOOL) acceptsFirstMouse:(NSEvent*)event
+{
+	return YES;
+}
+
+- (BOOL) shouldDelayWindowOrderingForEvent:(NSEvent*)theEvent
+{
+	return puglview->transientParent && puglview->hints[PUGL_IS_POPUP];
+}
+
 @end
 
 static PuglStatus

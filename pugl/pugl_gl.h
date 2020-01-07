@@ -46,6 +46,17 @@ puglGetProcAddress(const char* name);
 PUGL_API const PuglBackend*
 puglGlBackend(void);
 
+/**
+   Return a pointer to the native handle of the world.
+
+   On X11, this returns a pointer to the Display.
+   On OSX, this returns CGContextRef for current GraphicsPort.
+   On Windows, this returns a handle to the calling process module.
+*/
+PUGL_API void*
+puglGlBackendGetNativeWorld(PuglWorld* world);
+
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

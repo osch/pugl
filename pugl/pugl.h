@@ -151,7 +151,10 @@ typedef uint32_t PuglMods;
 typedef enum {
 	// ASCII control codes
 	PUGL_KEY_BACKSPACE = 0x08,
+	PUGL_KEY_TAB       = 0x09,
+	PUGL_KEY_RETURN    = 0x0D,
 	PUGL_KEY_ESCAPE    = 0x1B,
+	PUGL_KEY_SPACE     = 0x20,
 	PUGL_KEY_DELETE    = 0x7F,
 
 	// Unicode Private Use Area
@@ -193,7 +196,24 @@ typedef enum {
 	PUGL_KEY_SCROLL_LOCK,
 	PUGL_KEY_NUM_LOCK,
 	PUGL_KEY_PRINT_SCREEN,
-	PUGL_KEY_PAUSE
+	PUGL_KEY_PAUSE,
+	
+	PUGL_KEY_KP_ENTER,
+	PUGL_KEY_KP_HOME,
+	PUGL_KEY_KP_LEFT,
+	PUGL_KEY_KP_UP,
+	PUGL_KEY_KP_RIGHT,
+	PUGL_KEY_KP_DOWN,
+	PUGL_KEY_KP_PAGE_UP,
+	PUGL_KEY_KP_PAGE_DOWN,
+	PUGL_KEY_KP_END,
+	PUGL_KEY_KP_BEGIN,
+	PUGL_KEY_KP_INSERT,
+	PUGL_KEY_KP_DELETE,
+	PUGL_KEY_KP_MULTIPLY,
+	PUGL_KEY_KP_ADD,
+	PUGL_KEY_KP_SUBTRACT,
+	PUGL_KEY_KP_DIVIDE
 } PuglKey;
 
 /**
@@ -208,14 +228,14 @@ typedef enum {
 	PUGL_CLOSE,          ///< Close view
 	PUGL_KEY_PRESS,      ///< Key press
 	PUGL_KEY_RELEASE,    ///< Key release
-	PUGL_TEXT,           ///< Character entry
 	PUGL_ENTER_NOTIFY,   ///< Pointer entered view
 	PUGL_LEAVE_NOTIFY,   ///< Pointer left view
 	PUGL_MOTION_NOTIFY,  ///< Pointer motion
 	PUGL_SCROLL,         ///< Scroll
 	PUGL_FOCUS_IN,       ///< Keyboard focus entered view
 	PUGL_FOCUS_OUT,      ///< Keyboard focus left view
-	PUGL_DESTROY         ///< View is going to be destroyed */
+	PUGL_DESTROY,        ///< View is going to be destroyed
+	PUGL_DATA_RECEIVED   ///< Clipboard/Selection data received 
 } PuglEventType;
 
 typedef enum {
@@ -303,6 +323,16 @@ typedef struct {
 } PuglEventDestroy;
 
 /**
+   Clipboard/Selection data received event.
+*/
+typedef struct {
+	PuglEventType type;        /**< PUGL_DATA_RECEIVED. */
+	uint32_t      flags;       /**< Bitwise OR of PuglEventFlag values. */
+	const char*   data;
+	size_t        len;
+} PuglEventReceived;
+
+/**
    Key press/release event.
 
    This represents low-level key press and release events.  This event type
@@ -325,27 +355,13 @@ typedef struct {
 	PuglMods       state;   ///< Bitwise OR of PuglMod flags
 	uint32_t       keycode; ///< Raw key code
 	uint32_t       key;     ///< Unshifted Unicode character code, or 0
+	union {
+	    char*      ptr;
+	    char       data[8];
+	} input;               ///< UTF-8 string
+	size_t         inputLength;
 } PuglEventKey;
 
-/**
-   Character input event.
-
-   This represents text input, usually as the result of a key press.  The text
-   is given both as a Unicode character code and a UTF-8 string.
-*/
-typedef struct {
-	PuglEventType  type;      ///< PUGL_CHAR
-	PuglEventFlags flags;     ///< Bitwise OR of PuglEventFlag values
-	double         time;      ///< Time in seconds
-	double         x;         ///< View-relative X coordinate
-	double         y;         ///< View-relative Y coordinate
-	double         xRoot;     ///< Root-relative X coordinate
-	double         yRoot;     ///< Root-relative Y coordinate
-	PuglMods       state;     ///< Bitwise OR of PuglMod flags
-	uint32_t       keycode;   ///< Raw key code
-	uint32_t       character; ///< Unicode character code */
-	char           string[8]; ///< UTF-8 string
-} PuglEventText;
 
 /**
    Pointer crossing event (enter and leave).
@@ -424,12 +440,12 @@ typedef union {
 	PuglEventExpose    expose;    ///< PUGL_EXPOSE
 	PuglEventClose     close;     ///< PUGL_CLOSE
 	PuglEventKey       key;       ///< PUGL_KEY_PRESS, PUGL_KEY_RELEASE
-	PuglEventText      text;      ///< PUGL_TEXT
 	PuglEventCrossing  crossing;  ///< PUGL_ENTER_NOTIFY, PUGL_LEAVE_NOTIFY
 	PuglEventMotion    motion;    ///< PUGL_MOTION_NOTIFY
 	PuglEventScroll    scroll;    ///< PUGL_SCROLL
 	PuglEventFocus     focus;     ///< PUGL_FOCUS_IN, PUGL_FOCUS_OUT
-	PuglEventDestroy   destroy;   ///< PUGL_DESTROY. */
+	PuglEventDestroy   destroy;   ///< PUGL_DESTROY
+	PuglEventReceived  received;  ///< PUGL_DATA_RECEIVED
 } PuglEvent;
 
 /**
@@ -506,7 +522,7 @@ puglFreeWorld(PuglWorld* world);
    Return a pointer to the native handle of the world.
 
    On X11, this returns a pointer to the Display.
-   On OSX, this returns NULL.
+   On OSX, this returns CGContextRef for current GraphicsPort.
    On Windows, this returns a handle to the calling process module.
 */
 PUGL_API void*
@@ -872,29 +888,35 @@ PUGL_API PuglStatus
 puglGrabFocus(PuglView* view);
 
 /**
-   Get clipboard contents.
+   Request clipboard contents.
+   
+   The clipboard content will be received via PUGL_DATA_RECEIVED event.
 
    @param view The view.
-   @param[out] type Set to the MIME type of the data.
-   @param[out] len Set to the length of the data in bytes.
-   @return The clipboard contents.
 */
-PUGL_API const void*
-puglGetClipboard(PuglView* view, const char** type, size_t* len);
+PUGL_API PuglStatus
+puglRequestClipboard(PuglView* view);
 
 /**
    Set clipboard contents.
 
-   @param view The view.
+   @param world The world.
    @param type The MIME type of the data, "text/plain" is assumed if NULL.
    @param data The data to copy to the clipboard.
-   @param len The length of data in bytes (including terminator if necessary).
+   @param len The length of data in bytes.
 */
 PUGL_API PuglStatus
-puglSetClipboard(PuglView*   view,
+puglSetClipboard(PuglWorld*  world,
                  const char* type,
                  const void* data,
                  size_t      len);
+
+/**
+  Returns true iff the given world owns the clipboard. This
+  is always false on Win and Mac.
+*/
+PUGL_API bool
+puglHasClipboard(PuglWorld*  world);
 
 /**
    Request user attention.

@@ -36,10 +36,14 @@
 	NSMutableAttributedString* markedText;
 	NSTimer*                   urgentTimer;
 	bool                       reshaped;
+	uint32_t                   mouseButtons;
+	bool                       mouseEntered;
+	PuglEventKey*              processingKeyEvent;
 }
 
 - (void) dispatchExpose:(NSRect)rect;
 - (void) setReshaped;
+- (void) clipboardReceived;
 
 @end
 
@@ -55,17 +59,17 @@
 
 struct PuglWorldInternalsImpl {
 	NSApplication*     app;
-	NSAutoreleasePool* autoreleasePool;
 	double             nextProcessTime;
 	id                 worldProxy;
 	NSTimer*           processTimer;
+	bool               polling;
 };
 
 struct PuglInternalsImpl {
 	NSApplication*   app;
 	PuglWrapperView* wrapperView;
 	NSView*          drawView;
-	id               window;
+	PuglWindow*      window;
 	uint32_t         mods;
 	bool             posRequested;
 	bool             displayed;

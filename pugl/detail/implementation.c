@@ -57,13 +57,19 @@ void
 puglSetBlob(PuglBlob* const dest, const void* const data, const size_t len)
 {
 	if (data) {
-		dest->len  = len;
-		dest->data = realloc(dest->data, len + 1);
-		memcpy(dest->data, data, len);
-		((char*)dest->data)[len] = 0;
+		void* newPtr = realloc(dest->data, len + 1);
+		if (newPtr) {
+		    dest->data = newPtr;
+		    dest->len  = len;
+		    memcpy(newPtr, data, len);
+		    ((char*)newPtr)[len] = 0;
+		}
 	} else {
 		dest->len  = 0;
-		dest->data = NULL;
+		if (dest->data) {
+		    free(dest->data);
+		    dest->data = NULL;
+		}
 	}
 }
 
@@ -106,6 +112,7 @@ void
 puglFreeWorld(PuglWorld* const world)
 {
 	puglFreeWorldInternals(world);
+	free(world->clipboard.data);
 	free(world->className);
 	free(world->views);
 	free(world);
@@ -275,7 +282,7 @@ puglDecodeUTF8(const uint8_t* buf)
 }
 
 void
-puglDispatchEvent(PuglView* view, const PuglEvent* event)
+puglDispatchEvent(PuglView* view, PuglEvent* event)
 {
 	switch (event->type) {
 	case PUGL_NOTHING:
@@ -291,6 +298,22 @@ puglDispatchEvent(PuglView* view, const PuglEvent* event)
 			view->eventFunc(view, event);
 			puglLeaveContext(view, true);
 		}
+		break;
+	case PUGL_DATA_RECEIVED:
+		view->eventFunc(view, event);
+		if (event->received.data) {
+		    free((void*)event->received.data);
+		    event->received.data = NULL;
+		    event->received.len  = 0;
+		}
+		break;
+	case PUGL_KEY_PRESS:
+	case PUGL_KEY_RELEASE:
+		view->eventFunc(view, event);
+		if (event->key.inputLength > 8) {
+		    free(event->key.input.ptr);
+		}
+                event->key.inputLength = 0;
 		break;
 	default:
 		view->eventFunc(view, event);
@@ -314,7 +337,7 @@ puglGetInternalClipboard(const PuglView* const view,
 }
 
 PuglStatus
-puglSetInternalClipboard(PuglView* const   view,
+puglSetInternalClipboard(PuglWorld* const  world,
                          const char* const type,
                          const void* const data,
                          const size_t      len)
@@ -323,7 +346,7 @@ puglSetInternalClipboard(PuglView* const   view,
 		return PUGL_UNSUPPORTED_TYPE;
 	}
 
-	puglSetBlob(&view->clipboard, data, len);
+	puglSetBlob(&world->clipboard, data, len);
 	return PUGL_SUCCESS;
 }
 

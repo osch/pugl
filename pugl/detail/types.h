@@ -64,6 +64,8 @@ struct PuglViewImpl {
 	uintptr_t          transientParent;
 	PuglHints          hints;
 	PuglRect           frame;
+	int                reqX;
+	int                reqY;
 	int                reqWidth;
 	int                reqHeight;
 	int                minWidth;
@@ -84,6 +86,7 @@ struct PuglWorldImpl {
 	void*               processUserData;
 	size_t              numViews;
 	PuglView**          views;
+	PuglBlob            clipboard;
 };
 
 /** Opaque surface used by graphics backend. */

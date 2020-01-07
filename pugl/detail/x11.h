@@ -27,6 +27,8 @@
 
 typedef struct {
 	Atom CLIPBOARD;
+	Atom TARGETS;
+	Atom INCR;
 	Atom UTF8_STRING;
 	Atom WM_PROTOCOLS;
 	Atom WM_DELETE_WINDOW;
@@ -35,10 +37,19 @@ typedef struct {
 	Atom NET_WM_STATE_DEMANDS_ATTENTION;
 } PuglX11Atoms;
 
+typedef struct PuglX11IncrTarget {
+	Window       win;
+	Atom         prop;
+	Atom         type;
+	size_t       pos;
+} PuglX11IncrTarget;
+
 struct PuglWorldInternalsImpl {
 	Display*     display;
 	PuglX11Atoms atoms;
 	XIM          xim;
+	Window       pseudoWin;
+	PuglX11IncrTarget incrTarget;
 	double       nextProcessTime;
 	bool         needsProcessing;
 	int          awake_fds[2];
@@ -53,6 +64,10 @@ struct PuglInternalsImpl {
 	PuglSurface* surface;
 	PuglEvent    pendingConfigure;
 	PuglEvent    pendingExpose;
+	int          clipboardRequested;
+	bool         incrClipboardRequest;
+	bool         displayed;
+	bool         posRequested;
 };
 
 static inline PuglStatus

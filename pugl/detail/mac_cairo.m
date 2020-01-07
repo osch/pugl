@@ -65,6 +65,26 @@
 	return YES;
 }
 
+- (BOOL) acceptsFirstMouse:(NSEvent*)event
+{
+	return YES;
+}
+
+- (BOOL) shouldDelayWindowOrderingForEvent:(NSEvent*)theEvent
+{
+	return puglview->transientParent && puglview->hints[PUGL_IS_POPUP];
+}
+
+- (BOOL) acceptsFirstResponder
+{
+	return !(puglview->transientParent && puglview->hints[PUGL_IS_POPUP]);
+}
+
+- (BOOL) becomeFirstResponder
+{
+	return !(puglview->transientParent && puglview->hints[PUGL_IS_POPUP]);
+}
+
 @end
 
 static PuglStatus
@@ -145,6 +165,13 @@ static void*
 puglMacCairoGetContext(PuglView* view)
 {
 	return ((PuglCairoView*)view->impl->drawView)->cr;
+}
+
+void*
+puglCairoBackendGetNativeWorld(PuglWorld* PUGL_UNUSED(world))
+{
+	CGContextRef contextRef = (CGContextRef)[[NSGraphicsContext currentContext] graphicsPort];
+	return contextRef;
 }
 
 const PuglBackend* puglCairoBackend(void)

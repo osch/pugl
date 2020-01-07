@@ -31,7 +31,7 @@ struct PuglWorldInternalsImpl {
 	char*  worldClassName;
 	char*  windowClassName;
 	char*  popupClassName;
-	HWND   messageReceiver;
+	HWND   pseudoWin;
 	double timerFrequency;
 	double nextProcessTime;
 };
@@ -47,6 +47,19 @@ struct PuglInternalsImpl {
 	bool         resizing;
 	bool         mouseTracked;
 };
+
+static wchar_t*
+puglUtf8ToWideChar(const char* const utf8)
+{
+	const int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+	if (len > 0) {
+		wchar_t* result = (wchar_t*)calloc((size_t)len, sizeof(wchar_t));
+		MultiByteToWideChar(CP_UTF8, 0, utf8, -1, result, len);
+		return result;
+	}
+
+	return NULL;
+}
 
 static inline PuglWinPFD
 puglWinGetPixelFormatDescriptor(const PuglHints hints)
@@ -93,7 +106,8 @@ puglWinGetWindowExFlags(const PuglView* const view)
 	const bool isPopup   = view->hints[PUGL_IS_POPUP];
 	return   WS_EX_NOINHERITLAYOUT | WS_EX_WINDOWEDGE 
 	       | ((!view->parent && !view->transientParent && !isPopup) ? WS_EX_APPWINDOW : 0u)
-	       | ((!view->parent &&  view->transientParent) ? WS_EX_TOOLWINDOW : 0u);
+	       | ((!view->parent &&  view->transientParent && !isPopup) ? WS_EX_TOOLWINDOW : 0u)
+	       | ((!view->parent &&  view->transientParent &&  isPopup) ? WS_EX_NOACTIVATE : 0u);
 }
 
 static inline PuglStatus
@@ -120,20 +134,30 @@ puglWinCreateWindow(const PuglView* const view,
 	if      (view->parent)          { parent = (HWND)view->parent; }
 	else if (view->transientParent) { parent = (HWND)view->transientParent; }
 	else                            { parent = HWND_DESKTOP; }
-	    
+	
+	wchar_t* classNameW = puglUtf8ToWideChar(className);
+	wchar_t* titleW     = puglUtf8ToWideChar(title);
+	
 	// Create window and get drawing context
-	if (!(*hwnd = CreateWindowEx(winExFlags, className, title, winFlags,
-	                             CW_USEDEFAULT, CW_USEDEFAULT,
-	                             wr.right-wr.left, wr.bottom-wr.top,
-	                             parent,
-	                             NULL, NULL, NULL))) {
+	if (!classNameW || !titleW) {
+	    free(classNameW); free(titleW);
+	    return PUGL_FAILURE;
+	}
+	if (!(*hwnd = CreateWindowExW(winExFlags, classNameW, titleW, winFlags,
+	                              CW_USEDEFAULT, CW_USEDEFAULT,
+	                              wr.right-wr.left, wr.bottom-wr.top,
+	                              parent,
+	                              NULL, NULL, NULL))) {
+		free(classNameW); free(titleW);
 		return PUGL_CREATE_WINDOW_FAILED;
 	} else if (!(*hdc = GetDC(*hwnd))) {
 		DestroyWindow(*hwnd);
 		*hwnd = NULL;
+		free(classNameW); free(titleW);
 		return PUGL_CREATE_WINDOW_FAILED;
 	}
 
+	free(classNameW); free(titleW);
 	return PUGL_SUCCESS;
 }
 

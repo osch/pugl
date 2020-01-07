@@ -65,7 +65,7 @@ uint32_t puglDecodeUTF8(const uint8_t* buf);
 
 /** Dispatch `event` to `view`, optimising configure/expose if possible. */
 PUGL_API_PRIVATE
-void puglDispatchEvent(PuglView* view, const PuglEvent* event);
+void puglDispatchEvent(PuglView* view, PuglEvent* event);
 
 /** Set internal (stored in view) clipboard contents. */
 PUGL_API_PRIVATE 
@@ -75,7 +75,7 @@ puglGetInternalClipboard(const PuglView* view, const char** type, size_t* len);
 /** Set internal (stored in view) clipboard contents. */
 PUGL_API_PRIVATE
 PuglStatus
-puglSetInternalClipboard(PuglView*   view,
+puglSetInternalClipboard(PuglWorld*  world,
                          const char* type,
                          const void* data,
                          size_t      len);

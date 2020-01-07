@@ -167,6 +167,12 @@ puglWinCairoGetContext(PuglView* view)
 	return ((PuglWinCairoSurface*)view->impl->surface)->cr;
 }
 
+void*
+puglCairoBackendGetNativeWorld(PuglWorld* PUGL_UNUSED(world))
+{
+	return GetModuleHandle(NULL);
+}
+
 const PuglBackend*
 puglCairoBackend()
 {

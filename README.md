@@ -1,3 +1,8 @@
+This is a modified copy of Pugl, see also:
+   * https://drobilla.net/software/pugl
+   * https://gitlab.com/lv2/pugl
+   * https://github.com/drobilla/pugl
+
 Pugl
 ====
 

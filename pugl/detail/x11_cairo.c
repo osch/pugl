@@ -144,6 +144,12 @@ puglX11CairoGetContext(PuglView* view)
 	return surface->crContext;
 }
 
+void*
+puglCairoBackendGetNativeWorld(PuglWorld* world)
+{
+	return world->impl->display;
+}
+
 const PuglBackend*
 puglCairoBackend(void)
 {

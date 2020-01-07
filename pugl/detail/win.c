@@ -46,9 +46,11 @@
 #    define GWLP_USERDATA (-21)
 #endif
 
-#define PUGL_LOCAL_CLOSE_MSG (WM_USER + 50)
-#define PUGL_LOCAL_MARK_MSG  (WM_USER + 51)
-#define PUGL_LOCAL_AWAKE_MSG (WM_USER + 52)
+#define PUGL_LOCAL_CLOSE_MSG  (WM_USER + 50)
+#define PUGL_LOCAL_MARK_MSG   (WM_USER + 51)
+#define PUGL_LOCAL_AWAKE_MSG  (WM_USER + 52)
+#define PUGL_LOCAL_CLIPBD_MSG (WM_USER + 53)
+
 #define PUGL_RESIZE_TIMER_ID  9461
 #define PUGL_URGENT_TIMER_ID  9462
 #define PUGL_PROCESS_TIMER_ID 9463
@@ -61,28 +63,17 @@ worldWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK
 wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
-static wchar_t*
-puglUtf8ToWideChar(const char* const utf8)
-{
-	const int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-	if (len > 0) {
-		wchar_t* result = (wchar_t*)calloc((size_t)len, sizeof(wchar_t));
-		MultiByteToWideChar(CP_UTF8, 0, utf8, -1, result, len);
-		return result;
-	}
-
-	return NULL;
-}
-
 static char*
 puglWideCharToUtf8(const wchar_t* const wstr, size_t* len)
 {
 	int n = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
 	if (n > 0) {
 		char* result = (char*)calloc((size_t)n, sizeof(char));
-		WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result, n, NULL, NULL);
-		*len = (size_t)n;
-		return result;
+		if (result) {
+			WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result, n, NULL, NULL);
+			*len = (size_t)n;
+			return result;
+		}
 	}
 
 	return NULL;
@@ -191,6 +182,7 @@ puglInitWorldInternals2(PuglWorld* world)
 		puglSetString(&impl->popupClassName, buffer);
 		free(buffer); 
 	}
+	
 	WNDCLASSEX wc = { 0 };
 	wc.cbSize        = sizeof(wc);
 	wc.style         = CS_OWNDC;
@@ -216,17 +208,18 @@ puglInitWorldInternals2(PuglWorld* world)
 		UnregisterClass(impl->windowClassName, NULL);
 		goto failed;
 	}
-	impl->messageReceiver = CreateWindowEx(0, impl->worldClassName, impl->worldClassName, 
-	                                       0, 0, 0, 0, 0, 
-	                                       HWND_MESSAGE, NULL, NULL, NULL);
-	if (!impl->messageReceiver) {
+	impl->pseudoWin = CreateWindowEx(0, impl->worldClassName, impl->worldClassName, 
+	                                 0, 0, 0, 0, 0, 
+	                                 HWND_MESSAGE, NULL, NULL, NULL);
+	if (!impl->pseudoWin) {
 		UnregisterClass(impl->worldClassName, NULL);
 		UnregisterClass(impl->windowClassName, NULL);
 		UnregisterClass(impl->popupClassName, NULL);
 		goto failed;
 	}
-	SetWindowLongPtr(impl->messageReceiver, GWLP_USERDATA, (LONG_PTR)world);
+	SetWindowLongPtr(impl->pseudoWin, GWLP_USERDATA, (LONG_PTR)world);
 	impl->initialized = true;
+
 	return true;
 
 failed:
@@ -285,8 +278,8 @@ puglPollEvents(PuglWorld* world, const double timeout)
 void
 puglAwake(PuglWorld* world)
 {
-	if (world->impl->messageReceiver) {
-		PostMessage(world->impl->messageReceiver, PUGL_LOCAL_AWAKE_MSG, 0, 0);
+	if (world->impl->pseudoWin) {
+		PostMessage(world->impl->pseudoWin, PUGL_LOCAL_AWAKE_MSG, 0, 0);
 	}
 }
 
@@ -332,8 +325,12 @@ puglShowWindow(PuglView* view)
 {
 	PuglInternals* impl = view->impl;
 
-	ShowWindow(impl->hwnd, SW_SHOWNORMAL);
-	SetFocus(impl->hwnd);
+	if (!view->parent && view->transientParent && view->hints[PUGL_IS_POPUP]) {
+	    ShowWindow(impl->hwnd, SW_SHOWNOACTIVATE);
+	} else {
+	    ShowWindow(impl->hwnd, SW_SHOWNORMAL);
+	    SetFocus(impl->hwnd);
+	}
 	view->visible = true;
 	return PUGL_SUCCESS;
 }
@@ -381,9 +378,9 @@ puglFreeWorldInternals(PuglWorld* world)
 		free(world->impl->popupClassName);
 		world->impl->popupClassName = NULL;
 	}
-	if (world->impl->messageReceiver) {
-		SetWindowLongPtr(world->impl->messageReceiver, GWLP_USERDATA, (LONG_PTR)NULL);
-		DestroyWindow(world->impl->messageReceiver);
+	if (world->impl->pseudoWin) {
+		SetWindowLongPtr(world->impl->pseudoWin, GWLP_USERDATA, (LONG_PTR)NULL);
+		DestroyWindow(world->impl->pseudoWin);
 	}
 	free(world->impl);
 }
@@ -507,12 +504,13 @@ puglDecodeUTF16(const wchar_t* buf, const int len)
 	return c0;
 }
 
-static void
+static bool
 initKeyEvent(PuglEventKey* event,
              PuglView*     view,
              bool          press,
              WPARAM        wParam,
-             LPARAM        lParam)
+             LPARAM        lParam,
+             UINT          wmCharMsgType)
 {
 	POINT rpos = { 0, 0 };
 	GetCursorPos(&rpos);
@@ -554,21 +552,76 @@ initKeyEvent(PuglEventKey* event,
 		const int ulen = ToUnicode(vkey, vcode, keyboardState, buf, 4, 1<<2);
 		event->key = puglDecodeUTF16(buf, ulen);
 	}
+	MSG msg;
+	while (PeekMessageW(&msg, view->impl->hwnd, wmCharMsgType, wmCharMsgType, PM_REMOVE)) {
+	    const wchar_t utf16[2] = { msg.wParam & 0xFFFF, (msg.wParam >> 16) & 0xFFFF };
+	    char bytes[8];
+	    int len = WideCharToMultiByte(CP_UTF8, 0, utf16, utf16[1] ? 2 : 1, bytes, sizeof(bytes), NULL, NULL);
+	    if (len > 0) {
+                char* newInput;
+                if (event->inputLength + len > 8) {
+                    if (event->inputLength > 8)  {
+                        newInput = realloc(event->input.ptr, event->inputLength + len);
+                    }
+                    else {
+                        newInput = malloc(event->inputLength + len);
+                        if (newInput) memcpy(newInput, event->input.data, event->inputLength);
+                    }
+                    if (newInput) {
+                        event->input.ptr = newInput;
+                    }
+                } else {
+                    newInput = event->input.data;
+                }
+                if (newInput) {
+                    memcpy(newInput + event->inputLength, bytes, len);
+                    event->inputLength += len;
+                }
+            }
+	}
+	if (event->state == PUGL_MOD_ALT && event->key == PUGL_KEY_F4) {
+	    return false;
+	} else {
+	    return true;
+	}
 }
 
 static void
-initCharEvent(PuglEvent* event, PuglView* view, WPARAM wParam, LPARAM lParam)
+initCharEvent(PuglEventKey* event, PuglView* view, WPARAM wParam, LPARAM lParam)
 {
-	const wchar_t utf16[2] = { wParam & 0xFFFF, (wParam >> 16) & 0xFFFF };
+	POINT rpos = { 0, 0 };
+	GetCursorPos(&rpos);
 
-	initKeyEvent(&event->key, view, true, wParam, lParam);
-	event->type           = PUGL_TEXT;
-	event->text.character = puglDecodeUTF16(utf16, 2);
+	POINT cpos = { rpos.x, rpos.y };
+	ScreenToClient(view->impl->hwnd, &rpos);
 
-	if (!WideCharToMultiByte(
-		    CP_UTF8, 0, utf16, 2, event->text.string, 8, NULL, NULL)) {
-		memset(event->text.string, 0, 8);
-	}
+	const unsigned scode = (uint32_t)((lParam & 0xFF0000) >> 16);
+	const unsigned vkey  = ((wParam == VK_SHIFT)
+	                        ? MapVirtualKey(scode, MAPVK_VSC_TO_VK_EX)
+	                        : (unsigned)wParam);
+
+	const unsigned vcode = MapVirtualKey(vkey, MAPVK_VK_TO_VSC);
+	const unsigned kchar = MapVirtualKey(vkey, MAPVK_VK_TO_CHAR);
+	const bool     dead  = kchar >> (sizeof(UINT) * 8 - 1) & 1;
+	const bool     ext   = lParam & 0x01000000;
+
+	event->type    = PUGL_KEY_PRESS;
+	event->time    = GetMessageTime() / 1e3;
+	event->state   = getModifiers();
+	event->xRoot   = rpos.x;
+	event->yRoot   = rpos.y;
+	event->x       = cpos.x;
+	event->y       = cpos.y;
+	event->keycode = (uint32_t)((lParam & 0xFF0000) >> 16);
+	event->key     = 0;
+
+        const wchar_t utf16[2] = { wParam & 0xFFFF, (wParam >> 16) & 0xFFFF };
+        int len = WideCharToMultiByte(CP_UTF8, 0, utf16, utf16[1] ? 2 : 1, event->input.data, 8, NULL, NULL);
+        if (len > 0) {
+            event->inputLength = len;
+        } else {
+            event->inputLength = 0;
+        }
 }
 
 static bool
@@ -614,7 +667,7 @@ handleCrossing(PuglView* view, const PuglEventType type, POINT pos)
 	POINT root_pos = pos;
 	ClientToScreen(view->impl->hwnd, &root_pos);
 
-	const PuglEventCrossing ev = {
+	PuglEventCrossing ev = {
 		type,
 		0,
 		GetMessageTime() / 1e3,
@@ -625,7 +678,7 @@ handleCrossing(PuglView* view, const PuglEventType type, POINT pos)
 		getModifiers(),
 		PUGL_CROSSING_NORMAL
 	};
-	puglDispatchEvent(view, (const PuglEvent*)&ev);
+	puglDispatchEvent(view, (PuglEvent*)&ev);
 }
 
 static void
@@ -748,6 +801,13 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_ERASEBKGND:
 		return true;
+	case WM_MOUSEACTIVATE:
+	        if (!view->parent &&  view->transientParent && view->hints[PUGL_IS_POPUP]) {
+	            return MA_NOACTIVATE;
+	        } else {
+	            return DefWindowProcW(view->impl->hwnd, message, wParam, lParam);
+	        }
+	        break;
 	case WM_MOUSEMOVE:
 		pt.x = GET_X_LPARAM(lParam);
 		pt.y = GET_Y_LPARAM(lParam);
@@ -808,14 +868,15 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_KEYDOWN:
 		if (!ignoreKeyEvent(view, lParam)) {
-			initKeyEvent(&event.key, view, true, wParam, lParam);
+			initKeyEvent(&event.key, view, true, wParam, lParam, WM_CHAR);
 		}
 		break;
 	case WM_KEYUP:
-		initKeyEvent(&event.key, view, false, wParam, lParam);
+		initKeyEvent(&event.key, view, false, wParam, lParam, WM_CHAR);
 		break;
 	case WM_CHAR:
-		initCharEvent(&event, view, wParam, lParam);
+	case WM_IME_CHAR:
+		initCharEvent(&event.key, view, wParam, lParam);
 		break;
 	case WM_SETFOCUS:
 		stopFlashing(view);
@@ -824,15 +885,21 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_KILLFOCUS:
 		event.type = PUGL_FOCUS_OUT;
 		break;
-/* SYSKEY-Handling disabled, otherwise things like Alt+F4 are not working...
-	case WM_SYSKEYDOWN:
-		initKeyEvent(&event.key, view, true, wParam, lParam);
+	case WM_SYSKEYDOWN: {
+		if (!initKeyEvent(&event.key, view, true, wParam, lParam, WM_SYSCHAR)) {
+			event.type = PUGL_NOTHING;
+			DefWindowProcW(view->impl->hwnd, message, wParam, lParam);
+		}
 		break;
+	}
 	case WM_SYSKEYUP:
-		initKeyEvent(&event.key, view, false, wParam, lParam);
+		if (!initKeyEvent(&event.key, view, false, wParam, lParam, WM_SYSCHAR)) {
+			event.type = PUGL_NOTHING;
+			DefWindowProcW(view->impl->hwnd, message, wParam, lParam);
+		}
 		break;
 	case WM_SYSCHAR:
-		return TRUE;*/
+		return TRUE;//*/
 	case WM_QUIT:
 	case PUGL_LOCAL_CLOSE_MSG:
 		event.close.type = PUGL_CLOSE;
@@ -840,8 +907,17 @@ handleMessage(PuglView* view, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_DESTROY:
 	        event.destroy.type = PUGL_DESTROY;
 		break;
+	case PUGL_LOCAL_CLIPBD_MSG:
+	        if (view->clipboard.data) {
+	            event.received.type = PUGL_DATA_RECEIVED;
+	            event.received.data = view->clipboard.data;
+	            event.received.len  = view->clipboard.len;
+	            view->clipboard.data = NULL;
+	            view->clipboard.len = 0;
+	        }
+	        break;
 	default:
-		return DefWindowProc(view->impl->hwnd, message, wParam, lParam);
+		return DefWindowProcW(view->impl->hwnd, message, wParam, lParam);
 	}
 
 	puglDispatchEvent(view, &event);
@@ -896,13 +972,13 @@ puglSetNextProcessTime(PuglWorld* world, double seconds)
 	}
 	if (seconds >= 0) {
 		world->impl->nextProcessTime = puglGetTime(world) + seconds;
-		SetTimer(world->impl->messageReceiver,
+		SetTimer(world->impl->pseudoWin,
 			 PUGL_PROCESS_TIMER_ID,
 			 (UINT)(seconds * 1000),
 			 NULL);
 	} else {
 		world->impl->nextProcessTime = -1;
-		KillTimer(world->impl->messageReceiver, 
+		KillTimer(world->impl->pseudoWin, 
 		          PUGL_PROCESS_TIMER_ID);
 	}
 }
@@ -955,33 +1031,33 @@ worldWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 	switch (message) {
 	case WM_TIMER:
-		if (  world && hwnd == world->impl->messageReceiver
+		if (  world && hwnd == world->impl->pseudoWin
 		   && wParam == PUGL_PROCESS_TIMER_ID) 
 		{
 		    PuglWorldInternals* impl = world->impl;
 		    double current = puglGetTime(world);
 		    if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= current) {
 		        impl->nextProcessTime = -1;
-		        KillTimer(impl->messageReceiver, PUGL_PROCESS_TIMER_ID);
+		        KillTimer(impl->pseudoWin, PUGL_PROCESS_TIMER_ID);
 		        if (world->processFunc) world->processFunc(world, world->processUserData);
 		    } else if (impl->nextProcessTime >= 0) {
 		        double seconds = impl->nextProcessTime - current;
-		        SetTimer(world->impl->messageReceiver,
+		        SetTimer(world->impl->pseudoWin,
 		                 PUGL_PROCESS_TIMER_ID,
 		                 (UINT)(seconds * 1000),
 		                 NULL);
 		    } else {
-		        KillTimer(impl->messageReceiver, PUGL_PROCESS_TIMER_ID);
+		        KillTimer(impl->pseudoWin, PUGL_PROCESS_TIMER_ID);
 		    }
 		}
 		break;
 	case PUGL_LOCAL_AWAKE_MSG:
-		if (world && hwnd == world->impl->messageReceiver) {
+		if (world && hwnd == world->impl->pseudoWin) {
 		        if (world->processFunc) world->processFunc(world, world->processUserData);
 		}
 		break;
 	default:
-		return DefWindowProc(hwnd, message, wParam, lParam);
+		return DefWindowProcW(hwnd, message, wParam, lParam);
 	}
 }
 
@@ -1002,7 +1078,7 @@ wndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (view && hwnd == view->impl->hwnd) {
 			return handleMessage(view, message, wParam, lParam);
 		} else {
-			return DefWindowProc(hwnd, message, wParam, lParam);
+			return DefWindowProcW(hwnd, message, wParam, lParam);
 		}
 	}
 }
@@ -1143,23 +1219,21 @@ puglSetTransientFor(PuglView* view, PuglNativeWindow parent)
 	}
 }
 
-const void*
-puglGetClipboard(PuglView* const    view,
-                 const char** const type,
-                 size_t* const      len)
+PuglStatus
+puglRequestClipboard(PuglView* view)
 {
 	PuglInternals* const impl = view->impl;
 
 	if (!IsClipboardFormatAvailable(CF_UNICODETEXT) ||
 	    !OpenClipboard(impl->hwnd)) {
-		return NULL;
+		return PUGL_FAILURE;
 	}
 
 	HGLOBAL  mem  = GetClipboardData(CF_UNICODETEXT);
 	wchar_t* wstr = mem ? (wchar_t*)GlobalLock(mem) : NULL;
 	if (!wstr) {
 		CloseClipboard();
-		return NULL;
+		return PUGL_FAILURE;
 	}
 
 	free(view->clipboard.data);
@@ -1167,21 +1241,27 @@ puglGetClipboard(PuglView* const    view,
 	GlobalUnlock(mem);
 	CloseClipboard();
 
-	return puglGetInternalClipboard(view, type, len);
+	PostMessage(impl->hwnd, PUGL_LOCAL_CLIPBD_MSG, 0, 0);
+
+	return PUGL_SUCCESS;
 }
 
 PuglStatus
-puglSetClipboard(PuglView* const   view,
-                 const char* const type,
-                 const void* const data,
-                 const size_t      len)
+puglSetClipboard(PuglWorld*  world,
+                 const char* type,
+                 const void* data,
+                 size_t      len)
 {
-	PuglInternals* const impl = view->impl;
+	PuglWorldInternals* const impl = world->impl;
 
-	PuglStatus st = puglSetInternalClipboard(view, type, data, len);
+	if (!impl->initialized && !puglInitWorldInternals2(world)) {
+		return PUGL_FAILURE;
+	}
+
+	PuglStatus st = puglSetInternalClipboard(world, type, data, len);
 	if (st) {
 		return st;
-	} else if (!OpenClipboard(impl->hwnd)) {
+	} else if (!OpenClipboard(impl->pseudoWin)) {
 		return PUGL_UNKNOWN_ERROR;
 	}
 
@@ -1209,6 +1289,12 @@ puglSetClipboard(PuglView* const   view,
 	SetClipboardData(CF_UNICODETEXT, mem);
 	CloseClipboard();
 	return PUGL_SUCCESS;
+}
+
+bool
+puglHasClipboard(PuglWorld*  world)
+{
+	return false;
 }
 
 static PuglStatus

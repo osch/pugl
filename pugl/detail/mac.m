@@ -100,26 +100,54 @@ rescheduleProcessTimer(PuglWorld* world)
 @implementation PuglWorldProxy
 - (void) processTimerCallback
 {
-	if (world) {
-		PuglWorldInternals* impl = world->impl;
-		if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= puglGetTime(world)) {
-		    releaseProcessTimer(impl);
-		    impl->nextProcessTime = -1;
-		    if (world->processFunc) world->processFunc(world, world->processUserData);
-		}
-		else {
-		   rescheduleProcessTimer(world);
-		}
-	}
+        if (world) {
+                PuglWorldInternals* impl = world->impl;
+                if (impl->nextProcessTime >= 0 && impl->nextProcessTime <= puglGetTime(world)) {
+                    releaseProcessTimer(impl);
+                    impl->nextProcessTime = -1;
+                    if (world->processFunc) {
+                        world->processFunc(world, world->processUserData);
+                        if (world->impl->polling) {
+                            NSEvent* event = [NSEvent otherEventWithType: NSEventTypeApplicationDefined
+                                                                location: NSMakePoint(0,0)
+                                                            modifierFlags: 0
+                                                                timestamp: 0.0
+                                                             windowNumber: 0
+                                                                  context: nil
+                                                                  subtype: 0
+                                                                    data1: 0
+                                                                    data2: 0];
+                            [world->impl->app postEvent:event atStart:false];
+                        }
+                    }
+                }
+                else {
+                   rescheduleProcessTimer(world);
+                }
+        }
 
 }
 - (void) awakeCallback
 {
 	if (world) {
-		if (world->processFunc) world->processFunc(world, world->processUserData);
+		if (world->processFunc) {
+		    world->processFunc(world, world->processUserData);
+		    if (world->impl->polling) {
+		        NSEvent* event = [NSEvent otherEventWithType: NSEventTypeApplicationDefined
+		                                            location: NSMakePoint(0,0)
+                                                       modifierFlags: 0
+                                                           timestamp: 0.0
+                                                        windowNumber: 0
+                                                             context: nil
+                                                             subtype: 0
+                                                               data1: 0
+                                                               data2: 0];
+		        [world->impl->app postEvent:event atStart:false];
+		    }   
+		}
 	}
 }
-- (void)setPuglWorld:(PuglWorld*)w
+- (void) setPuglWorld:(PuglWorld*)w
 {
 	world = w;
 }
@@ -151,12 +179,12 @@ rescheduleProcessTimer(PuglWorld* world)
 
 - (BOOL) canBecomeKeyWindow
 {
-	return YES;
+	return puglview && !(puglview->transientParent && puglview->hints[PUGL_IS_POPUP]);
 }
 
 - (BOOL) canBecomeMainWindow
 {
-	return YES;
+	return puglview && !(puglview->transientParent && puglview->hints[PUGL_IS_POPUP]);
 }
 
 @end
@@ -167,16 +195,20 @@ rescheduleProcessTimer(PuglWorld* world)
 {
 	[super resizeWithOldSuperviewSize:oldSize];
 
+        if (!puglview) return;
+        
 	const NSRect bounds = [self bounds];
 	puglview->backend->resize(puglview, bounds.size.width, bounds.size.height);
 }
 
 - (void) dispatchExpose:(NSRect)rect
 {
+        if (!puglview) return;
+        
 	if (reshaped) {
 		updateViewRect(puglview);
 
-		const PuglEventConfigure ev =  {
+		PuglEventConfigure ev =  {
 			PUGL_CONFIGURE,
 			0,
 			puglview->frame.x,
@@ -185,11 +217,11 @@ rescheduleProcessTimer(PuglWorld* world)
 			puglview->frame.height,
 		};
 
-		puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+		puglDispatchEvent(puglview, (PuglEvent*)&ev);
 		reshaped = false;
 	}
 
-	const PuglEventExpose ev = {
+	PuglEventExpose ev = {
 		PUGL_EXPOSE,
 		0,
 		rect.origin.x,
@@ -199,7 +231,7 @@ rescheduleProcessTimer(PuglWorld* world)
 		0
 	};
 
-	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+	puglDispatchEvent(puglview, (PuglEvent*)&ev);
 }
 
 - (BOOL) isFlipped
@@ -209,12 +241,30 @@ rescheduleProcessTimer(PuglWorld* world)
 
 - (BOOL) acceptsFirstResponder
 {
-	return YES;
+	return puglview && !(puglview->transientParent && puglview->hints[PUGL_IS_POPUP]);
+}
+
+- (BOOL) becomeFirstResponder
+{
+	return puglview && !(puglview->transientParent && puglview->hints[PUGL_IS_POPUP]);
 }
 
 - (void) setReshaped
 {
 	reshaped = true;
+}
+
+- (void) clipboardReceived
+{
+	if (puglview && puglview->clipboard.data) {
+	    PuglEvent ev = {0};
+            ev.received.type = PUGL_DATA_RECEIVED;
+            ev.received.data = puglview->clipboard.data;
+            ev.received.len  = puglview->clipboard.len;
+            puglview->clipboard.data = NULL;
+            puglview->clipboard.len = 0;
+	    puglDispatchEvent(puglview, &ev);
+	}
 }
 
 static uint32_t
@@ -234,35 +284,39 @@ keySymToSpecial(const NSEvent* const ev)
 	NSString* chars = [ev charactersIgnoringModifiers];
 	if ([chars length] == 1) {
 		switch ([chars characterAtIndex:0]) {
-		case NSF1FunctionKey:          return PUGL_KEY_F1;
-		case NSF2FunctionKey:          return PUGL_KEY_F2;
-		case NSF3FunctionKey:          return PUGL_KEY_F3;
-		case NSF4FunctionKey:          return PUGL_KEY_F4;
-		case NSF5FunctionKey:          return PUGL_KEY_F5;
-		case NSF6FunctionKey:          return PUGL_KEY_F6;
-		case NSF7FunctionKey:          return PUGL_KEY_F7;
-		case NSF8FunctionKey:          return PUGL_KEY_F8;
-		case NSF9FunctionKey:          return PUGL_KEY_F9;
-		case NSF10FunctionKey:         return PUGL_KEY_F10;
-		case NSF11FunctionKey:         return PUGL_KEY_F11;
-		case NSF12FunctionKey:         return PUGL_KEY_F12;
-		case NSDeleteCharacter:        return PUGL_KEY_BACKSPACE;
-		case NSDeleteFunctionKey:      return PUGL_KEY_DELETE;
-		case NSLeftArrowFunctionKey:   return PUGL_KEY_LEFT;
-		case NSUpArrowFunctionKey:     return PUGL_KEY_UP;
-		case NSRightArrowFunctionKey:  return PUGL_KEY_RIGHT;
-		case NSDownArrowFunctionKey:   return PUGL_KEY_DOWN;
-		case NSPageUpFunctionKey:      return PUGL_KEY_PAGE_UP;
-		case NSPageDownFunctionKey:    return PUGL_KEY_PAGE_DOWN;
-		case NSHomeFunctionKey:        return PUGL_KEY_HOME;
-		case NSEndFunctionKey:         return PUGL_KEY_END;
-		case NSInsertFunctionKey:      return PUGL_KEY_INSERT;
-		case NSMenuFunctionKey:        return PUGL_KEY_MENU;
-		case NSScrollLockFunctionKey:  return PUGL_KEY_SCROLL_LOCK;
-		case NSClearLineFunctionKey:   return PUGL_KEY_NUM_LOCK;
-		case NSPrintScreenFunctionKey: return PUGL_KEY_PRINT_SCREEN;
-		case NSPauseFunctionKey:       return PUGL_KEY_PAUSE;
-		}
+		case NSDeleteCharacter:         return PUGL_KEY_BACKSPACE;
+		case NSTabCharacter:            return PUGL_KEY_TAB;
+		case NSCarriageReturnCharacter: return PUGL_KEY_RETURN;
+		case NSEnterCharacter:          return PUGL_KEY_KP_ENTER;
+		case 0x001B:                    return PUGL_KEY_ESCAPE;
+		case NSDeleteFunctionKey:       return PUGL_KEY_DELETE;
+		case NSF1FunctionKey:           return PUGL_KEY_F1;
+		case NSF2FunctionKey:           return PUGL_KEY_F2;
+		case NSF3FunctionKey:           return PUGL_KEY_F3;
+		case NSF4FunctionKey:           return PUGL_KEY_F4;
+		case NSF5FunctionKey:           return PUGL_KEY_F5;
+		case NSF6FunctionKey:           return PUGL_KEY_F6;
+		case NSF7FunctionKey:           return PUGL_KEY_F7;
+		case NSF8FunctionKey:           return PUGL_KEY_F8;
+		case NSF9FunctionKey:           return PUGL_KEY_F9;
+		case NSF10FunctionKey:          return PUGL_KEY_F10;
+		case NSF11FunctionKey:          return PUGL_KEY_F11;
+		case NSF12FunctionKey:          return PUGL_KEY_F12;
+		case NSLeftArrowFunctionKey:    return PUGL_KEY_LEFT;
+		case NSUpArrowFunctionKey:      return PUGL_KEY_UP;
+		case NSRightArrowFunctionKey:   return PUGL_KEY_RIGHT;
+		case NSDownArrowFunctionKey:    return PUGL_KEY_DOWN;
+		case NSPageUpFunctionKey:       return PUGL_KEY_PAGE_UP;
+		case NSPageDownFunctionKey:     return PUGL_KEY_PAGE_DOWN;
+		case NSHomeFunctionKey:         return PUGL_KEY_HOME;
+		case NSEndFunctionKey:          return PUGL_KEY_END;
+		case NSInsertFunctionKey:       return PUGL_KEY_INSERT;
+		case NSMenuFunctionKey:         return PUGL_KEY_MENU;
+		case NSScrollLockFunctionKey:   return PUGL_KEY_SCROLL_LOCK;
+		case NSClearLineFunctionKey:    return PUGL_KEY_NUM_LOCK;
+		case NSPrintScreenFunctionKey:  return PUGL_KEY_PRINT_SCREEN;
+		case NSPauseFunctionKey:        return PUGL_KEY_PAUSE;
+		default:                        break;		}
 		// SHIFT, CTRL, ALT, and SUPER are handled in [flagsChanged]
 	}
 	return (PuglKey)0;
@@ -294,9 +348,9 @@ keySymToSpecial(const NSEvent* const ev)
 static void
 handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 {
-	const NSPoint           wloc = [view eventLocation:event];
-	const NSPoint           rloc = [NSEvent mouseLocation];
-	const PuglEventCrossing ev   = {
+	const NSPoint     wloc = [view eventLocation:event];
+	const NSPoint     rloc = [NSEvent mouseLocation];
+	PuglEventCrossing ev = {
 		type,
 		0,
 		[event timestamp],
@@ -307,24 +361,26 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		getModifiers(event),
 		PUGL_CROSSING_NORMAL
 	};
-	puglDispatchEvent(view->puglview, (const PuglEvent*)&ev);
+	puglDispatchEvent(view->puglview, (PuglEvent*)&ev);
 }
 
 - (void) mouseEntered:(NSEvent*)event
 {
+	mouseEntered = true;
 	handleCrossing(self, event, PUGL_ENTER_NOTIFY);
 }
 
 - (void) mouseExited:(NSEvent*)event
 {
+	mouseEntered = false;
 	handleCrossing(self, event, PUGL_LEAVE_NOTIFY);
 }
 
 - (void) mouseMoved:(NSEvent*)event
 {
-	const NSPoint         wloc = [self eventLocation:event];
-	const NSPoint         rloc = [NSEvent mouseLocation];
-	const PuglEventMotion ev   = {
+	const NSPoint   wloc = [self eventLocation:event];
+	const NSPoint   rloc = [NSEvent mouseLocation];
+	PuglEventMotion ev   = {
 		PUGL_MOTION_NOTIFY,
 		0,
 		[event timestamp],
@@ -336,7 +392,9 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		0,
 		1
 	};
-	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+	if (mouseButtons || mouseEntered) {
+	    puglDispatchEvent(puglview, (PuglEvent*)&ev);
+	}
 }
 
 - (void) mouseDragged:(NSEvent*)event
@@ -356,9 +414,9 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 
 - (void) mouseDown2:(NSEvent*)event button:(uint32_t)buttonNumber
 {
-	const NSPoint         wloc = [self eventLocation:event];
-	const NSPoint         rloc = [NSEvent mouseLocation];
-	const PuglEventButton ev   = {
+	const NSPoint   wloc = [self eventLocation:event];
+	const NSPoint   rloc = [NSEvent mouseLocation];
+	PuglEventButton ev   = {
 		PUGL_BUTTON_PRESS,
 		0,
 		[event timestamp],
@@ -369,19 +427,25 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		getModifiers(event),
 		buttonNumber
 	};
-	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+	if (1 <= buttonNumber && buttonNumber <= 32) {
+	    mouseButtons |= (1 << (buttonNumber - 1));
+	}
+	puglDispatchEvent(puglview, (PuglEvent*)&ev);
 }
 
 - (void) mouseDown:(NSEvent*)event
 {
+    if (puglview->transientParent && puglview->hints[PUGL_IS_POPUP]) {
+        [NSApp preventWindowOrdering];
+    }
     [self mouseDown2:event button:1];
 }
 
 - (void) mouseUp2:(NSEvent*)event button:(uint32_t)buttonNumber
 {
-	const NSPoint         wloc = [self eventLocation:event];
-	const NSPoint         rloc = [NSEvent mouseLocation];
-	const PuglEventButton ev   = {
+	const NSPoint   wloc = [self eventLocation:event];
+	const NSPoint   rloc = [NSEvent mouseLocation];
+	PuglEventButton ev   = {
 		PUGL_BUTTON_RELEASE,
 		0,
 		[event timestamp],
@@ -392,7 +456,10 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		getModifiers(event),
 		buttonNumber
 	};
-	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+	if (1 <= buttonNumber && buttonNumber <= 32) {
+	    mouseButtons &= ~(1 << (buttonNumber - 1));
+	}
+	puglDispatchEvent(puglview, (PuglEvent*)&ev);
 }
 
 - (void) mouseUp:(NSEvent*)event
@@ -422,9 +489,9 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 
 - (void) scrollWheel:(NSEvent*)event
 {
-	const NSPoint         wloc = [self eventLocation:event];
-	const NSPoint         rloc = [NSEvent mouseLocation];
-	const PuglEventScroll ev   = {
+	const NSPoint   wloc = [self eventLocation:event];
+	const NSPoint   rloc = [NSEvent mouseLocation];
+	PuglEventScroll ev   = {
 		PUGL_SCROLL,
 		0,
 		[event timestamp],
@@ -436,7 +503,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		[event scrollingDeltaX],
 		[event scrollingDeltaY]
 	};
-	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+	puglDispatchEvent(puglview, (PuglEvent*)&ev);
 }
 
 - (void) keyDown:(NSEvent*)event
@@ -453,7 +520,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 	const uint32_t     code  = (
 		spec ? spec : puglDecodeUTF8((const uint8_t*)str));
 
-	const PuglEventKey ev = {
+	PuglEventKey ev = {
 		PUGL_KEY_PRESS,
 		0,
 		[event timestamp],
@@ -466,11 +533,12 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		(code != 0xFFFD) ? code : 0
 	};
 
-	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
-
 	if (!spec) {
+	        processingKeyEvent = &ev;
 		[self interpretKeyEvents:@[event]];
+		processingKeyEvent = NULL;
 	}
+	puglDispatchEvent(puglview, (PuglEvent*)&ev);
 }
 
 - (void) keyUp:(NSEvent*)event
@@ -483,7 +551,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 	const uint32_t     code  =
 		(spec ? spec : puglDecodeUTF8((const uint8_t*)str));
 
-	const PuglEventKey ev = {
+	PuglEventKey ev = {
 		PUGL_KEY_RELEASE,
 		0,
 		[event timestamp],
@@ -495,7 +563,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 		[event keyCode],
 		(code != 0xFFFD) ? code : 0
 	};
-	puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+	puglDispatchEvent(puglview, (PuglEvent*)&ev);
 }
 
 - (BOOL) hasMarkedText
@@ -573,41 +641,61 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 {
 	(void)replacement;
 
-	NSEvent* const  event      = [NSApp currentEvent];
 	NSString* const characters =
 		([string isKindOfClass:[NSAttributedString class]]
 		 ? [string string]
 		 : (NSString*)string);
+        
+        const char* bytes = [characters UTF8String];
+        size_t len = strlen(bytes);
 
-	const NSPoint wloc = [self eventLocation:event];
-	const NSPoint rloc = [NSEvent mouseLocation];
-	for (size_t i = 0; i < [characters length]; ++i) {
-		const uint32_t code    = [characters characterAtIndex:i];
-		char           utf8[8] = {0};
-		NSUInteger     len     = 0;
-
-		[characters getBytes:utf8
-		           maxLength:sizeof(utf8)
-		          usedLength:&len
-		            encoding:NSUTF8StringEncoding
-		             options:0
-		               range:NSMakeRange(i, i + 1)
-		      remainingRange:nil];
-
-		PuglEventText ev = { PUGL_TEXT,
-		                     0,
-		                     [event timestamp],
-		                     wloc.x,
-		                     wloc.y,
-		                     rloc.x,
-		                     [[NSScreen mainScreen] frame].size.height - rloc.y,
-		                     getModifiers(event),
-		                     [event keyCode],
-		                     code,
-		                     { 0, 0, 0, 0, 0, 0, 0, 0 } };
-
-		memcpy(ev.string, utf8, len);
-		puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+        if (processingKeyEvent) {
+            PuglEventKey* event = processingKeyEvent;
+            char* newInput;
+            if (event->inputLength + len > 8) {
+                if (event->inputLength > 8)  {
+                    newInput = realloc(event->input.ptr, event->inputLength + len);
+                }
+                else {
+                    newInput = malloc(event->inputLength + len);
+                    if (newInput) memcpy(newInput, event->input.data, event->inputLength);
+                }
+                if (newInput) {
+                    event->input.ptr = newInput;
+                }
+            } else {
+                newInput = event->input.data;
+            }
+            if (newInput) {
+                memcpy(newInput + event->inputLength, bytes, len);
+                event->inputLength += len;
+            }
+        } else {
+            NSEvent* const ev    = [NSApp currentEvent];
+            const NSPoint  wloc  = [self eventLocation:ev];
+            const NSPoint  rloc  = [NSEvent mouseLocation];
+            PuglEventKey   event = { PUGL_KEY_PRESS,
+                                     0,
+                                     [ev timestamp],
+                                     wloc.x,
+                                     wloc.y,
+                                     rloc.x,
+                                     [[NSScreen mainScreen] frame].size.height - rloc.y,
+                                     getModifiers(ev),
+                                     0, // keycode
+                                     0xffff }; // key
+            char* newInput;
+            if (len > 8) {
+                newInput = malloc(len);
+                if (newInput) event.input.ptr = newInput;
+            } else {
+                newInput = event.input.data;
+            }
+            if (newInput) {
+                memcpy(newInput, bytes, len);
+                event.inputLength = len;
+                puglDispatchEvent(puglview, (PuglEvent*)&ev);
+            }
 	}
 }
 
@@ -646,7 +734,7 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 			[event keyCode],
 			special
 		};
-		puglDispatchEvent(puglview, (const PuglEvent*)&ev);
+		puglDispatchEvent(puglview, (PuglEvent*)&ev);
 	}
 
 	puglview->impl->mods = mods;
@@ -713,7 +801,19 @@ handleCrossing(PuglWrapperView* view, NSEvent* event, const PuglEventType type)
 {
 	(void)notification;
 
-	updateViewRect(window->puglview);
+	PuglView* puglview = window->puglview;
+	
+	updateViewRect(puglview);
+	
+       	PuglEventConfigure ev =  {
+       		PUGL_CONFIGURE,
+       		0,
+		puglview->frame.x,
+		puglview->frame.y,
+		puglview->frame.width,
+		puglview->frame.height,
+       	};
+        puglDispatchEvent(puglview, (PuglEvent*)&ev);
 }
 
 - (void) windowDidBecomeKey:(NSNotification*)notification
@@ -758,7 +858,6 @@ puglInitWorldInternals(void)
 		1, sizeof(PuglWorldInternals));
 
 	impl->app             = [NSApplication sharedApplication];
-	impl->autoreleasePool = [NSAutoreleasePool new];
 
 	return impl;
 }
@@ -772,7 +871,6 @@ puglFreeWorldInternals(PuglWorld* world)
 		[world->impl->worldProxy release];
 		world->impl->worldProxy = NULL;
 	}
-	[world->impl->autoreleasePool drain];
 	free(world->impl);
 }
 
@@ -786,7 +884,8 @@ puglSetClassName(PuglWorld* const world, const char* const name)
 void*
 puglGetNativeWorld(PuglWorld* PUGL_UNUSED(world))
 {
-	return NULL;
+	CGContextRef contextRef = (CGContextRef)[[NSGraphicsContext currentContext] graphicsPort];
+	return contextRef;
 }
 
 PuglInternals*
@@ -819,7 +918,7 @@ puglCreateWindow(PuglView* view, const char* title)
 	impl->wrapperView->markedText = [[NSMutableAttributedString alloc] init];
 	[impl->wrapperView setAutoresizesSubviews:YES];
 	[impl->wrapperView initWithFrame:
-		     NSMakeRect(0, 0, view->frame.width, view->frame.height)];
+		     NSMakeRect(0, 0, view->reqWidth, view->reqHeight)];
 	[impl->wrapperView addConstraint:
 		     puglConstraint(impl->wrapperView, NSLayoutAttributeWidth, view->minWidth)];
 	[impl->wrapperView addConstraint:
@@ -835,23 +934,24 @@ puglCreateWindow(PuglView* view, const char* title)
 
 	// Add draw view to wraper view
 	[impl->wrapperView addSubview:impl->drawView];
-	[impl->wrapperView setHidden:NO];
 	[impl->drawView setHidden:NO];
 
 	if (view->parent) {
+	        [impl->wrapperView setHidden:YES];
 		NSView* pview = (NSView*)view->parent;
 		[pview addSubview:impl->wrapperView];
 		[impl->drawView setHidden:NO];
 		[[impl->drawView window] makeFirstResponder:impl->wrapperView];
 	} else {
+	        [impl->wrapperView setHidden:NO];
 		NSString* titleString = [[NSString alloc]
 			                        initWithBytes:title
 			                               length:strlen(title)
 			                             encoding:NSUTF8StringEncoding];
 
 		const NSRect frame = rectToScreen(
-			NSMakeRect(view->frame.x, view->frame.y,
-			           view->minWidth, view->minHeight));
+			NSMakeRect(0, 0,
+			           view->reqWidth, view->reqHeight));
 
 		unsigned style = (NSClosableWindowMask |
 		                  NSTitledWindowMask |
@@ -889,7 +989,7 @@ puglCreateWindow(PuglView* view, const char* title)
 		[window setContentView:impl->wrapperView];
 		
 		if (view->hints[PUGL_IS_POPUP]) {
-			[window setLevel:NSPopUpMenuWindowLevel];
+			//[window setLevel:NSPopUpMenuWindowLevel];
 			[window setHasShadow:YES];
 		}
 	}
@@ -903,27 +1003,53 @@ PuglStatus
 puglShowWindow(PuglView* view)
 {
 	NSWindow* window = view->impl->window;
-        if (!view->impl->displayed) {
-            view->impl->displayed = true;
-            if (!view->impl->posRequested) {
-                [window center];
+	if (window) {
+            if (!view->impl->displayed) {
+                view->impl->displayed = true;
+                if (view->transientParent && view->hints[PUGL_IS_POPUP]) {
+                    if (!view->impl->posRequested) {
+                        NSRect parentFrame = [[(id)view->transientParent window] frame];
+                        NSRect frame;
+                        frame.origin = parentFrame.origin;
+                        frame.size = NSMakeSize(view->frame.width, view->frame.height);
+                        [window setFrame: frame display:NO];
+                    }
+                    [[(id)view->transientParent window] addChildWindow:window ordered:NSWindowAbove];
+                } else {
+                    if (!view->impl->posRequested) {
+                        [window center];
+                    }
+                }
             }
-        }
-	[window setIsVisible:YES];
-     	[view->world->impl->app activateIgnoringOtherApps:YES];
-     	[window makeFirstResponder:view->impl->wrapperView];
-     	[window makeKeyAndOrderFront:window];
+            [window setIsVisible:YES];
+            if (!(view->transientParent && view->hints[PUGL_IS_POPUP])) {
+                [view->world->impl->app activateIgnoringOtherApps:YES];
+                [window makeFirstResponder:view->impl->wrapperView];
+                [window makeKeyAndOrderFront:window];
+            }
+     	} 
+     	else {
+     	    [view->impl->wrapperView setHidden:NO];
+     	}
 	updateViewRect(view);
 	view->visible = true;
+
+        [view->impl->drawView setNeedsDisplay: YES];
+	
 	return PUGL_SUCCESS;
 }
 
 PuglStatus
 puglHideWindow(PuglView* view)
 {
-	[view->impl->window setIsVisible:NO];
-	view->visible = false;
-	return PUGL_SUCCESS;
+        NSWindow* window = view->impl->window;
+        if (window) {
+            [view->impl->window setIsVisible:NO];
+        } else {
+            [view->impl->wrapperView setHidden:YES];
+        }   
+        view->visible = false;
+        return PUGL_SUCCESS;
 }
 
 void
@@ -945,13 +1071,13 @@ puglFreeViewInternals(PuglView* view)
 			    [wrapperView->markedText release];
 			    wrapperView->markedText = NULL;
 			}
-			[view->impl->wrapperView removeFromSuperview];
-			view->impl->wrapperView->puglview = NULL;
+			[wrapperView removeFromSuperview];
+			wrapperView->puglview = NULL;
+			[wrapperView release];
+
 			if (view->impl->window) {
+				view->impl->window->puglview = NULL;
 				[view->impl->window close];
-			}
-			[view->impl->wrapperView release];
-			if (view->impl->window) {
 				[view->impl->window release];
 			}
 			free(view->impl);
@@ -1008,11 +1134,7 @@ puglSetProcessFunc(PuglWorld* world, PuglProcessFunc processFunc, void* userData
 	if (processFunc) {
 	    if (!world->impl->worldProxy) {
 	        world->impl->worldProxy = [[PuglWorldProxy alloc] init];
-	    }
-	    [world->impl->worldProxy setPuglWorld: world];
-	} else {
-	    if (world->impl->worldProxy) {
-	        [world->impl->worldProxy setPuglWorld: NULL];
+	        [world->impl->worldProxy setPuglWorld: world];
 	    }
 	}
 }
@@ -1037,6 +1159,8 @@ puglSetNextProcessTime(PuglWorld* world, double seconds)
 PuglStatus
 puglPollEvents(PuglWorld* world, const double timeout)
 {
+	world->impl->polling = true;
+	
 	NSDate* date = ((timeout < 0) ? [NSDate distantFuture] :
 	                (timeout == 0) ? nil :
 	                [NSDate dateWithTimeIntervalSinceNow:timeout]);
@@ -1049,6 +1173,8 @@ puglPollEvents(PuglWorld* world, const double timeout)
 	                     untilDate:date
 	                     inMode:NSDefaultRunLoopMode
 	                     dequeue:YES];
+
+	world->impl->polling = false;
 	if (event) {
 		[world->impl->app postEvent:event atStart:true];
 		return PUGL_SUCCESS;
@@ -1146,9 +1272,12 @@ puglSetWindowTitle(PuglView* view, const char* title)
 PuglStatus
 puglSetFrame(PuglView* view, const PuglRect frame)
 {
+        view->reqX      = (int)frame.x;
+        view->reqY      = (int)frame.y;
 	view->reqWidth  = (int)frame.width;
 	view->reqHeight = (int)frame.height;
-	view->impl->posRequested = true;
+
+        view->impl->posRequested = true;
 
 	PuglInternals* const impl = view->impl;
 
@@ -1163,6 +1292,13 @@ puglSetFrame(PuglView* view, const PuglRect frame)
 		// Resize views
 		const NSRect drawRect = NSMakeRect(0, 0, frame.width, frame.height);
 		[impl->wrapperView setFrame:drawRect];
+		[impl->drawView setFrame:drawRect];
+	}
+	else if (impl->wrapperView) {
+		const NSRect rect = NSMakeRect(frame.x, frame.y, frame.width, frame.height);
+		[impl->wrapperView setFrame:rect];
+		
+		const NSRect drawRect = NSMakeRect(0, 0, frame.width, frame.height);
 		[impl->drawView setFrame:drawRect];
 	}
 
@@ -1189,6 +1325,14 @@ puglSetSize(PuglView* view, int width, int height)
 		// Resize views
 		const NSRect drawRect = NSMakeRect(0, 0, width, height);
 		[impl->wrapperView setFrame:drawRect];
+		[impl->drawView setFrame:drawRect];
+	}
+	else if (impl->wrapperView) {
+	        NSRect rect = [impl->wrapperView frame];
+	        rect.size = NSMakeSize(width, height);
+		[impl->wrapperView setFrame:rect];
+		
+		const NSRect drawRect = NSMakeRect(0, 0, width, height);
 		[impl->drawView setFrame:drawRect];
 	}
 	return PUGL_SUCCESS;
@@ -1232,13 +1376,12 @@ PuglStatus
 puglSetTransientFor(PuglView* view, PuglNativeWindow parent)
 {
 	// not supported for mac
+	view->transientParent = parent;
 	return PUGL_SUCCESS;
 }
 
-const void*
-puglGetClipboard(PuglView* const    view,
-                 const char** const type,
-                 size_t* const      len)
+PuglStatus
+puglRequestClipboard(PuglView* view)
 {
 	NSPasteboard* const  pasteboard = [NSPasteboard generalPasteboard];
 
@@ -1246,22 +1389,26 @@ puglGetClipboard(PuglView* const    view,
 		const NSString* str  = [pasteboard stringForType:NSStringPboardType];
 		const char*     utf8 = [str UTF8String];
 
-		puglSetBlob(&view->clipboard, utf8, strlen(utf8) + 1);
+		puglSetBlob(&view->clipboard, utf8, strlen(utf8));
+
+                [view->impl->wrapperView performSelectorOnMainThread:@selector(clipboardReceived)
+                                                          withObject:nil
+                                                       waitUntilDone:NO];
 	}
 
-	return puglGetInternalClipboard(view, type, len);
+	return PUGL_SUCCESS;
 }
 
 PuglStatus
-puglSetClipboard(PuglView* const   view,
-                 const char* const type,
-                 const void* const data,
-                 const size_t      len)
+puglSetClipboard(PuglWorld*  world,
+                 const char* type,
+                 const void* data,
+                 size_t      len)
 {
 	NSPasteboard* const  pasteboard = [NSPasteboard generalPasteboard];
 	const char* const    str        = (const char*)data;
 
-	PuglStatus st = puglSetInternalClipboard(view, type, data, len);
+	PuglStatus st = puglSetInternalClipboard(world, type, data, len);
 	if (st) {
 		return st;
 	}
@@ -1273,6 +1420,13 @@ puglSetClipboard(PuglView* const   view,
 	              forType:NSStringPboardType];
 
 	return PUGL_SUCCESS;
+}
+
+
+bool
+puglHasClipboard(PuglWorld*  world)
+{
+	return false;
 }
 
 const PuglBackend*
