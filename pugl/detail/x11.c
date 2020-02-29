@@ -965,7 +965,6 @@ puglDispatchEvents(PuglWorld* world)
 		PuglEvent event = translateEvent(view, xevent);
 
 		if (event.type == PUGL_EXPOSE) {
-			// Expand expose event to be dispatched after loop
 			addPendingExpose(view, &event);
 		} else if (event.type == PUGL_CONFIGURE) {
 			// Expand configure event to be dispatched after loop
