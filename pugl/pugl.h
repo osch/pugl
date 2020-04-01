@@ -129,7 +129,8 @@ typedef enum {
 	PUGL_MOD_SHIFT = 1,      ///< Shift key
 	PUGL_MOD_CTRL  = 1 << 1, ///< Control key
 	PUGL_MOD_ALT   = 1 << 2, ///< Alt/Option key
-	PUGL_MOD_SUPER = 1 << 3  ///< Mod4/Command/Windows key
+	PUGL_MOD_SUPER = 1 << 3, ///< Mod4/Command/Windows key
+	PUGL_MOD_ALTGR = 1 << 4  ///< AltGr key
 } PuglMod;
 
 /**
@@ -214,7 +215,20 @@ typedef enum {
 	PUGL_KEY_KP_MULTIPLY,
 	PUGL_KEY_KP_ADD,
 	PUGL_KEY_KP_SUBTRACT,
-	PUGL_KEY_KP_DIVIDE
+	PUGL_KEY_KP_DIVIDE,
+	
+	PUGL_KEY_KP_0,
+	PUGL_KEY_KP_1,
+	PUGL_KEY_KP_2,
+	PUGL_KEY_KP_3,
+	PUGL_KEY_KP_4,
+	PUGL_KEY_KP_5,
+	PUGL_KEY_KP_6,
+	PUGL_KEY_KP_7,
+	PUGL_KEY_KP_8,
+	PUGL_KEY_KP_9,
+	PUGL_KEY_KP_SEPARATOR
+	
 } PuglKey;
 
 /**
