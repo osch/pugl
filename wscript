@@ -3,7 +3,7 @@
 import os
 import sys
 
-from waflib import Logs, Options, TaskGen
+from waflib import Build, Logs, Options, TaskGen
 from waflib.extras import autowaf
 
 # Library and package version (UNIX style major, minor, micro)
@@ -34,9 +34,10 @@ def options(ctx):
          'no-gl':       'do not build OpenGL support',
          'no-cairo':    'do not build Cairo support',
          'no-static':   'do not build static library',
-         'no-shared':   'do not build shared library',
-         'log':         'print GL information to console',
-         'grab-focus':  'work around keyboard issues by grabbing focus'})
+         'no-shared':   'do not build shared library'})
+
+    ctx.get_option_group('Test options').add_option(
+        '--gui-tests', action='store_true', help='Run GUI tests')
 
 
 def configure(conf):
@@ -55,21 +56,88 @@ def configure(conf):
     conf.env.TARGET_PLATFORM = Options.options.target or sys.platform
     platform                 = conf.env.TARGET_PLATFORM
 
-    def append_cflags(flags):
-        conf.env.append_value('CFLAGS', flags)
-        conf.env.append_value('CXXFLAGS', flags)
+    if Options.options.strict:
+        # Check for programs used by lint target
+        conf.find_program("flake8", var="FLAKE8", mandatory=False)
+        conf.find_program("clang-tidy", var="CLANG_TIDY", mandatory=False)
+        conf.find_program("iwyu_tool", var="IWYU_TOOL", mandatory=False)
 
-    if platform == 'darwin':
-        append_cflags(['-Wno-deprecated-declarations'])
+    if Options.options.ultra_strict:
+        # All warnings enabled by autowaf, disable some we trigger
 
-    if conf.env.MSVC_COMPILER:
-        append_cflags(['/wd4191'])
-    else:
-        conf.env.append_unique('LINKFLAGS', ['-fvisibility=hidden'])
-        append_cflags(['-fvisibility=hidden'])
-        if Options.options.strict:
-            append_cflags(['-Wunused-parameter', '-Wno-pedantic'])
+        autowaf.add_compiler_flags(conf.env, '*', {
+            'clang': [
+                '-Wno-padded',
+                '-Wno-reserved-id-macro',
+                '-Wno-switch-enum',
+            ],
+            'gcc': [
+                '-Wno-padded',
+                '-Wno-switch-enum',
+            ],
+            'msvc': [
+                '/wd4061',  # enumerator in switch is not explicitly handled
+                '/wd4514',  # unreferenced inline function has been removed
+                '/wd4820',  # padding added after construct
+                '/wd5045',  # will insert Spectre mitigation for memory load
+            ],
+        })
 
+        autowaf.add_compiler_flags(conf.env, 'c', {
+            'clang': [
+                '-Wno-bad-function-cast',
+                '-Wno-float-equal',
+                '-Wno-implicit-fallthrough',
+            ],
+            'gcc': [
+                '-Wno-bad-function-cast',
+                '-Wno-float-equal',
+            ],
+            'msvc': [
+                '/wd4191',  # unsafe conversion from type to type
+                '/wd4706',  # assignment within conditional expression
+                '/wd4710',  # function not inlined
+                '/wd5045',  # will insert Spectre mitigation for memory load
+            ],
+        })
+
+        autowaf.add_compiler_flags(conf.env, 'cxx', {
+            'clang': [
+                '-Wno-documentation-unknown-command',
+                '-Wno-old-style-cast',
+            ],
+            'gcc': [
+                '-Wno-old-style-cast',
+            ],
+            'msvc': [
+                '/wd4355',  # 'this' used in base member initializer list
+                '/wd4571',  # structured exceptions (SEH) are no longer caught
+                '/wd4625',  # copy constructor implicitly deleted
+                '/wd4626',  # assignment operator implicitly deleted
+                '/wd5026',  # move constructor implicitly deleted
+                '/wd5027',  # move assignment operator implicitly deleted
+            ],
+        })
+
+        # Add some platform-specific warning suppressions
+        if conf.env.TARGET_PLATFORM == "win32":
+            autowaf.add_compiler_flags(conf.env, '*', {
+                'gcc': ['-Wno-cast-function-type',
+                        '-Wno-conversion',
+                        '-Wno-format',
+                        '-Wno-suggest-attribute=format'],
+            })
+        elif conf.env.TARGET_PLATFORM == 'darwin':
+            autowaf.add_compiler_flags(conf.env, '*', {
+                'clang': ['-DGL_SILENCE_DEPRECATION',
+                          '-Wno-deprecated-declarations',
+                          '-Wno-direct-ivar-access'],
+                'gcc': ['-DGL_SILENCE_DEPRECATION',
+                        '-Wno-deprecated-declarations',
+                        '-Wno-direct-ivar-access'],
+            })
+
+    # Check for base system libraries needed on some systems
     conf.check_cc(lib='m', uselib_store='M', mandatory=False)
     conf.check_cc(lib='dl', uselib_store='DL', mandatory=False)
 
@@ -92,6 +160,22 @@ def configure(conf):
 
     else:
         conf.check_cc(lib='X11', uselib_store='X11')
+
+        xsync_fragment = """#include <X11/Xlib.h>
+            #include <X11/extensions/sync.h>
+            int main(void) { XSyncQueryExtension(0, 0, 0); return 0; }"""
+        if conf.check_cc(fragment=xsync_fragment,
+                         uselib_store='XSYNC',
+                         lib='Xext',
+                         mandatory=False,
+                         msg='Checking for function XSyncQueryExtension'):
+            conf.define('HAVE_XSYNC', 1)
+
+        if conf.check_cc(lib='Xcursor',
+                         uselib_store='XCURSOR',
+                         mandatory=False):
+            conf.define('HAVE_XCURSOR', 1)
+
         if not Options.options.no_gl:
             glx_fragment = """#include <GL/glx.h>
                 int main(void) { glXSwapBuffers(0, 0); return 0; }"""
@@ -109,25 +193,32 @@ def configure(conf):
         autowaf.check_pkg(conf, 'cairo',
                           uselib_store    = 'CAIRO',
                           atleast_version = '1.0.0',
+                          system          = True,
                           mandatory       = False)
-
-    if Options.options.log:
-        conf.define('PUGL_VERBOSE', 1)
 
     conf.env.update({
         'BUILD_SHARED': not Options.options.no_shared,
         'BUILD_STATIC': conf.env.BUILD_TESTS or not Options.options.no_static})
 
-    autowaf.set_lib_env(conf, 'pugl', PUGL_VERSION)
-    conf.write_config_header('pugl_config.h', remove=False)
+    if conf.env.TARGET_PLATFORM == 'win32':
+        conf.env.PUGL_PLATFORM = 'win'
+    elif conf.env.TARGET_PLATFORM == 'darwin':
+        conf.env.PUGL_PLATFORM = 'mac'
+    else:
+        conf.env.PUGL_PLATFORM = 'x11'
+
+    autowaf.set_lib_env(conf, 'pugl', PUGL_VERSION,
+                        lib='pugl_' + conf.env.PUGL_PLATFORM)
+
+    autowaf.set_lib_env(conf, 'pugl_gl', PUGL_VERSION,
+                        lib='pugl_%s_gl' % conf.env.PUGL_PLATFORM)
 
     autowaf.display_summary(
         conf,
         {"Build static library":   bool(conf.env.BUILD_STATIC),
          "Build shared library":   bool(conf.env.BUILD_SHARED),
          "OpenGL support":         bool(conf.env.HAVE_GL),
-         "Cairo support":          bool(conf.env.HAVE_CAIRO),
-         "Verbose console output": conf.is_defined('PUGL_VERBOSE')})
+         "Cairo support":          bool(conf.env.HAVE_CAIRO)})
 
 
 def _build_pc_file(bld, name, desc, target, libname, deps={}, requires=[]):
@@ -163,17 +254,21 @@ def _build_pc_file(bld, name, desc, target, libname, deps={}, requires=[]):
         LIBS=' '.join(link_flags))
 
 
+tests = ['redisplay', 'show_hide', 'update', 'timer']
+
+
 def build(bld):
     # C Headers
     includedir = '${INCLUDEDIR}/pugl-%s/pugl' % PUGL_MAJOR_VERSION
     bld.install_files(includedir, bld.path.ant_glob('pugl/*.h'))
     bld.install_files(includedir, bld.path.ant_glob('pugl/*.hpp'))
+    bld.install_files(includedir, bld.path.ant_glob('pugl/*.ipp'))
     if bld.env.ALL_HEADERS:
         detaildir = os.path.join(includedir, 'detail')
         bld.install_files(detaildir, bld.path.ant_glob('pugl/detail/*.h'))
         bld.install_files(detaildir, bld.path.ant_glob('pugl/detail/*.c'))
 
-    # Library dependencies of pugl libraries (for buiding tests)
+    # Library dependencies of pugl libraries (for building examples)
     deps = {}
 
     def build_pugl_lib(name, **kwargs):
@@ -187,18 +282,26 @@ def build(bld):
                      'install_path':    '${LIBDIR}',
                      'vnum':            PUGL_VERSION})
 
+        flags = []
+        if not bld.env.MSVC_COMPILER:
+            flags = ['-fPIC', '-fvisibility=hidden']
+
         if bld.env.BUILD_SHARED:
-            bld(features = 'c cshlib',
-                name     = name,
-                target   = 'pugl_' + name,
-                cflags   = ['-DPUGL_INTERNAL', '-DPUGL_SHARED'],
+            bld(features  = 'c cshlib',
+                name      = name,
+                target    = 'pugl_%s-%s' % (name, PUGL_MAJOR_VERSION),
+                defines   = ['PUGL_INTERNAL', 'PUGL_SHARED'],
+                cflags    = flags,
+                linkflags = flags,
                 **args)
 
         if bld.env.BUILD_STATIC:
-            bld(features = 'c cstlib',
-                name     = 'pugl_%s_static' % name,
-                target   = 'pugl_' + name,
-                cflags   = ['-DPUGL_INTERNAL'],
+            bld(features  = 'c cstlib',
+                name      = 'pugl_%s_static' % name,
+                target    = 'pugl_%s-%s' % (name, PUGL_MAJOR_VERSION),
+                defines   = ['PUGL_INTERNAL', 'PUGL_DISABLE_DEPRECATED'],
+                cflags    = flags,
+                linkflags = flags,
                 **args)
 
     def build_platform(platform, **kwargs):
@@ -240,6 +343,10 @@ def build(bld):
                        framework=['Cocoa'],
                        source=lib_source + ['pugl/detail/mac.m'])
 
+        build_backend('mac', 'stub',
+                      framework=['Cocoa'],
+                      source=['pugl/detail/mac_stub.m'])
+
         if bld.env.HAVE_GL:
             build_backend('mac', 'gl',
                           framework=['Cocoa', 'OpenGL'],
@@ -253,7 +360,7 @@ def build(bld):
     else:
         platform = 'x11'
         build_platform('x11',
-                       uselib=['M', 'X11'],
+                       uselib=['M', 'X11', 'XSYNC', 'XCURSOR'],
                        source=lib_source + ['pugl/detail/x11.c'])
 
         if bld.env.HAVE_GL:
@@ -267,8 +374,9 @@ def build(bld):
                           uselib=['CAIRO', 'X11'],
                           source=['pugl/detail/x11_cairo.c'])
 
-    def build_test(prog, source, platform, backend, **kwargs):
+    def build_example(prog, source, platform, backend, **kwargs):
         lang = 'cxx' if source[0].endswith('.cpp') else 'c'
+
         use = ['pugl_%s_static' % platform,
                'pugl_%s_%s_static' % (platform, backend)]
 
@@ -297,44 +405,94 @@ def build(bld):
 
     if bld.env.BUILD_TESTS:
         for s in ('rect.vert', 'rect.frag'):
-            # Copy shaders to build directory for test programs
+            # Copy shaders to build directory for example programs
             bld(features = 'subst',
                 is_copy  = True,
                 source   = 'shaders/%s' % s,
                 target   = 'shaders/%s' % s)
 
         if bld.env.HAVE_GL:
-            build_test('pugl_test', ['test/pugl_test.c'],
-                       platform, 'gl', uselib=['GL', 'M'])
-            build_test('pugl_print_events', ['test/pugl_print_events.c'],
-                       platform, 'stub')
-            build_test('pugl_gl3_test',
-                       ['test/pugl_gl3_test.c', 'test/glad/glad.c'],
-                       platform, 'gl', uselib=['DL', 'GL', 'M'])
+            glad_cflags = [] if bld.env.MSVC_COMPILER else ['-Wno-pedantic']
+            build_example('pugl_embed_demo', ['examples/pugl_embed_demo.c'],
+                          platform, 'gl', uselib=['GL', 'M'])
+            build_example('pugl_window_demo', ['examples/pugl_window_demo.c'],
+                          platform, 'gl', uselib=['GL', 'M'])
+            build_example('pugl_cursor_demo', ['examples/pugl_cursor_demo.c'],
+                          platform, 'gl', uselib=['GL', 'M'])
+            build_example('pugl_print_events',
+                          ['examples/pugl_print_events.c'],
+                          platform, 'stub')
+            build_example('pugl_shader_demo',
+                          ['examples/pugl_shader_demo.c',
+                           'examples/glad/glad.c'],
+                          platform, 'gl',
+                          cflags=glad_cflags,
+                          uselib=['DL', 'GL', 'M'])
 
         if bld.env.HAVE_CAIRO:
-            build_test('pugl_cairo_test', ['test/pugl_cairo_test.c'],
-                       platform, 'cairo',
-                       uselib=['M', 'CAIRO'])
+            build_example('pugl_cairo_demo', ['examples/pugl_cairo_demo.c'],
+                          platform, 'cairo',
+                          uselib=['M', 'CAIRO'])
+
+        for test in tests:
+            bld(features     = 'c cprogram',
+                source       = 'test/test_%s.c' % test,
+                target       = 'test/test_%s' % test,
+                install_path = '',
+                use          = ['pugl_%s_static' % platform,
+                                'pugl_%s_stub_static' % platform],
+                uselib       = deps[platform]['uselib'] + ['CAIRO'])
+
+        # Make a hyper strict warning environment for checking API headers
+        strict_env = bld.env.derive()
+        autowaf.remove_all_warning_flags(strict_env)
+        autowaf.enable_all_warnings(strict_env)
+        autowaf.set_warnings_as_errors(strict_env)
+        autowaf.add_compiler_flags(strict_env, '*', {
+            'clang': ['-Wno-padded'],
+            'gcc': ['-Wno-padded'],
+        })
+        autowaf.add_compiler_flags(strict_env, 'cxx', {
+            'clang': ['-Wno-documentation-unknown-command'],
+        })
+
+        # Check that C headers build with (almost) no warnings
+        bld(features     = 'c cprogram',
+            source       = 'test/test_build.c',
+            target       = 'test/test_build_c',
+            install_path = '',
+            env          = strict_env,
+            use          = ['pugl_%s_static' % platform],
+            uselib       = deps[platform]['uselib'] + ['CAIRO'])
+
+        # Check that C++ headers build with (almost) no warnings
+        bld(features     = 'cxx cxxprogram',
+            source       = 'test/test_build.cpp',
+            target       = 'test/test_build_cpp',
+            install_path = '',
+            env          = strict_env,
+            use          = ['pugl_%s_static' % platform],
+            uselib       = deps[platform]['uselib'] + ['CAIRO'])
 
         if bld.env.CXX and bld.env.HAVE_GL:
-            build_test('pugl_cxx_test', ['test/pugl_cxx_test.cpp'],
-                       platform, 'gl', uselib=['GL', 'M'])
+            build_example('pugl_cxx_demo', ['examples/pugl_cxx_demo.cpp'],
+                          platform, 'gl',
+                          defines=['PUGL_DISABLE_DEPRECATED'],
+                          uselib=['GL', 'M'])
 
     if bld.env.DOCS:
-        bld(features     = 'subst',
-            source       = 'doc/reference.doxygen.in',
-            target       = 'doc/reference.doxygen',
-            install_path = '',
-            PUGL_VERSION = PUGL_VERSION,
-            PUGL_SRCDIR  = os.path.abspath(bld.path.srcpath()))
-
-        bld(features = 'doxygen',
-            doxyfile = 'doc/reference.doxygen')
+        autowaf.build_dox(bld, 'PUGL', PUGL_VERSION, top, out)
 
 
 def test(tst):
-    pass
+    if tst.options.gui_tests:
+        with tst.group('gui') as check:
+            for test in tests:
+                check(['test/test_%s' % test])
+
+
+class LintContext(Build.BuildContext):
+    fun = cmd = 'lint'
 
 
 def lint(ctx):
@@ -342,20 +500,64 @@ def lint(ctx):
     import json
     import subprocess
 
-    subprocess.call("flake8 wscript --ignore E221,W504,E251,E241",
-                    shell=True)
+    st = 0
 
-    with open('build/compile_commands.json', 'r') as db:
-        commands = json.load(db)
-        files = [c['file'] for c in commands
-                 if os.path.basename(c['file']) != 'glad.c']
+    if "FLAKE8" in ctx.env:
+        Logs.info("Running flake8")
+        st = subprocess.call([ctx.env.FLAKE8[0],
+                              "wscript",
+                              "--ignore",
+                              "E221,W504,E251,E241,E741"])
+    else:
+        Logs.warn("Not running flake8")
 
-    subprocess.call(['clang-tidy'] + files, cwd='build')
+    if "IWYU_TOOL" in ctx.env:
+        Logs.info("Running include-what-you-use")
+        cmd = [ctx.env.IWYU_TOOL[0], "-o", "clang", "-p", "build"]
+        output = subprocess.check_output(cmd).decode('utf-8')
+        if 'error: ' in output:
+            sys.stdout.write(output)
+            st += 1
+    else:
+        Logs.warn("Not running include-what-you-use")
 
-    try:
-        subprocess.call(['iwyu_tool.py', '-o', 'clang', '-p', 'build'])
-    except Exception:
-        Logs.warn('Failed to call iwyu_tool.py')
+    if "CLANG_TIDY" in ctx.env and "clang" in ctx.env.CC[0]:
+        Logs.info("Running clang-tidy")
+        with open('build/compile_commands.json', 'r') as db:
+            commands = json.load(db)
+            files = [c['file'] for c in commands
+                     if os.path.basename(c['file']) != 'glad.c']
+
+            c_files = [os.path.join('build', f)
+                       for f in files if f.endswith('.c')]
+
+            cpp_files = [os.path.join('build', f)
+                         for f in files if f.endswith('.cpp')]
+
+        c_files = list(map(os.path.abspath, c_files))
+        cpp_files = list(map(os.path.abspath, cpp_files))
+
+        procs = []
+        for c_file in c_files:
+            cmd = [ctx.env.CLANG_TIDY[0], "--quiet", "-p=.", c_file]
+            procs += [subprocess.Popen(cmd, cwd="build")]
+
+        for cpp_file in cpp_files:
+            cmd = [ctx.env.CLANG_TIDY[0],
+                   '--header-filter=".*\\.hpp"',
+                   "--quiet",
+                   "-p=.", cpp_file]
+            procs += [subprocess.Popen(cmd, cwd="build")]
+
+        for proc in procs:
+            stdout, stderr = proc.communicate()
+            st += proc.returncode
+    else:
+        Logs.warn("Not running clang-tidy")
+
+    if st != 0:
+        sys.exit(st)
+
 
 # Alias .m files to be compiled like .c files, gcc will do the right thing.
 @TaskGen.extension('.m')

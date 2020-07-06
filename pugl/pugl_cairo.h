@@ -1,5 +1,5 @@
 /*
-  Copyright 2012-2019 David Robillard <http://drobilla.net>
+  Copyright 2012-2020 David Robillard <d@drobilla.net>
 
   Permission to use, copy, modify, and/or distribute this software for any
   purpose with or without fee is hereby granted, provided that the above
@@ -15,7 +15,8 @@
 */
 
 /**
-   @file pugl_cairo.h Declaration of Cairo backend accessor.
+   @file pugl_cairo.h
+   @brief Declaration of Cairo backend accessor.
 */
 
 #ifndef PUGL_PUGL_CAIRO_H
@@ -23,9 +24,14 @@
 
 #include "pugl/pugl.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+PUGL_BEGIN_DECLS
+
+/**
+   @defgroup cairo Cairo
+   Cairo graphics support.
+   @ingroup pugl_c
+   @{
+*/
 
 /**
    Cairo graphics backend accessor.
@@ -46,8 +52,10 @@ PUGL_API void*
 puglCairoBackendGetNativeWorld(PuglWorld* world);
 
 
-#ifdef __cplusplus
-}  /* extern "C" */
-#endif
+PUGL_END_DECLS
+
+/**
+   @}
+*/
 
 #endif // PUGL_PUGL_CAIRO_H
